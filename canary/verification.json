@@ -86,9 +86,9 @@
     "policy_changed": false
   },
   "windows_ci": {
-    "status": "pending",
+    "status": "passed",
     "workflow": ".github/workflows/canary-check.yml",
-    "workflow_sha256": "e7b74b87d6484973e9d7dc129e6b95245c61eab4946b662a6e7fe0eb6ed0f5c9",
+    "workflow_sha256": "34397c21461945f71059a00295cef0fada12e53135da48de3d632301ec359459",
     "runner": "windows-latest",
     "required_test_counts": [
       12,
@@ -96,7 +96,32 @@
       1,
       1
     ],
-    "release_binary_rebuild": false
+    "release_binary_rebuild": false,
+    "url": "https://github.com/ricardofelixb/herdr-codex-voice/actions/runs/37524185874",
+    "head_commit": "a9b09f6faa67662aa1d2bbaf719f9f21bfe8d9f3",
+    "focused_tests": {
+      "input_origin": {
+        "exit": 0,
+        "passed": 12,
+        "expected": 12
+      },
+      "protocol::endpoint::tests": {
+        "exit": 0,
+        "passed": 10,
+        "expected": 10
+      },
+      "server::client_transport::tests::dedicated_client_shell_handshake_uses_surface_viewport": {
+        "exit": 0,
+        "passed": 1,
+        "expected": 1
+      },
+      "api::schema::tests::generated_protocol_schema_artifact_is_current": {
+        "exit": 0,
+        "passed": 1,
+        "expected": 1
+      }
+    },
+    "report_sha256": "d565ff912d3df10ba5c9e0e012fa3a9ca80fa16c5be2c25c78a0e370a6052d78"
   },
   "workflow_static_validation": {
     "yaml_parse_exit": 0,
@@ -105,6 +130,11 @@
     "powershell_syntax": {
       "exit": 0,
       "executed_step": false
+    },
+    "actionlint": {
+      "version": "1.7.12",
+      "exit": 0,
+      "prior_invalid_contexts_fixed": 5
     }
   }
 }
