@@ -132,8 +132,14 @@ original file. Open a new Herdr terminal, then:
 codex
 ```
 
-Use `/voice` in Codex. Setup persists across terminal sessions and reboots;
-nothing needs to be installed in the microphone computer's Herdr. Mac setup
+Use `/voice` in Codex. Setup persists across terminal sessions and reboots.
+A terminal pane that was already open before setup still has its old shell
+settings. In each such pane, quit Codex and reload the shell once with
+`source ~/.bashrc` for Bash or `source ~/.zshrc` for Zsh, or open a new terminal
+pane. Reopening a workspace or expanding its machine reconnects existing
+panes; it does not reload their shells. New panes need no reload or enable script.
+
+Nothing needs to be installed in the microphone computer's Herdr. Mac setup
 installs a small background app under `~/.local/share/herdr-codex-voice`.
 You can also choose **Set up Codex
 voice** from Herdr's plugin actions. To change the microphone computer, run setup
