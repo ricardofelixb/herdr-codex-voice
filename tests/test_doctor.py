@@ -287,18 +287,23 @@ class SelectionTests(unittest.TestCase):
 
 
 class BrokenCodexTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.broken_codex = script(Path(self.tmp.name) / "codex", "raise SystemExit(1)\n")
+
     def test_codex_that_cannot_report_its_version_is_not_green(self):
         report = doctor.Report()
-        with patch.object(doctor.shutil, "which", return_value="/bin/false"):
+        with patch.object(doctor.shutil, "which", return_value=str(self.broken_codex)):
             info = doctor.codex(report, [(Path("local.json"), {"local": True})], True)
         self.assertIsNone(info["version"])
         failed = [c for c in report.checks if c["check"] == "codex"]
         self.assertEqual((failed[0]["status"], failed[0]["code"]), ("fail", "codex_broken"))
 
     def test_microphone_codex_that_cannot_report_its_version_is_not_green(self):
-        mic = {"host": "mic", "platform": "linux", "codex": "/bin/false", "python": sys.executable,
+        mic = {"host": "mic", "platform": "linux", "codex": str(self.broken_codex), "python": sys.executable,
                "node_dir": "", "codex_home": ""}
-        output = subprocess.run([sys.executable, "-c", doctor.UNIX_DIAGNOSE, "/bin/false", "", "", ""],
+        output = subprocess.run([sys.executable, "-c", doctor.UNIX_DIAGNOSE, mic["codex"], "", "", ""],
                                 capture_output=True, text=True, check=True).stdout
         report = doctor.Report()
         with patch.object(doctor, "remote", return_value=output), patch.object(doctor, "forwarding"):

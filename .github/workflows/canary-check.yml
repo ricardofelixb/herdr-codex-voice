@@ -25,18 +25,27 @@ jobs:
     timeout-minutes: 60
     env:
       HERDR_CANARY_PACKAGE: canary
-      CARGO_HOME: ${{ runner.temp }}/hcv-toolchain/cargo
-      RUSTUP_HOME: ${{ runner.temp }}/hcv-toolchain/rustup
       RUSTUP_TOOLCHAIN: '1.96.1'
-      CARGO_TARGET_DIR: ${{ runner.temp }}/hcv-target
-      ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/hcv-zig-global
-      ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/hcv-zig-local
       PYTHONDONTWRITEBYTECODE: '1'
       # Preserve the bytes covered by the source/patch manifests on Windows.
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: core.autocrlf
       GIT_CONFIG_VALUE_0: 'false'
     steps:
+      - name: Initialize task paths
+        shell: pwsh
+        run: |
+          $taskPaths = @{
+            CARGO_HOME = 'hcv-toolchain/cargo'
+            RUSTUP_HOME = 'hcv-toolchain/rustup'
+            CARGO_TARGET_DIR = 'hcv-target'
+            ZIG_GLOBAL_CACHE_DIR = 'hcv-zig-global'
+            ZIG_LOCAL_CACHE_DIR = 'hcv-zig-local'
+          }
+          foreach ($entry in $taskPaths.GetEnumerator()) {
+            "$($entry.Key)=$(Join-Path $env:RUNNER_TEMP $entry.Value)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
       - name: Check out the plugin and canary package
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
