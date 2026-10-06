@@ -1,0 +1,21 @@
+id = "herdr-codex-voice"
+name = "Codex Voice"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Native Codex voice in remote panes using your microphone computer over SSH."
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["python3", "voice.py", "install"]
+
+[[actions]]
+id = "setup"
+title = "Set up Codex voice"
+contexts = ["global", "workspace", "pane"]
+command = ["python3", "voice.py", "open-setup"]
+
+[[panes]]
+id = "setup"
+title = "Codex voice setup"
+placement = "popup"
+command = ["python3", "voice.py", "setup"]
