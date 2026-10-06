@@ -117,6 +117,28 @@ class VoiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "permission denied"):
             voice.run(["sh", "-c", "echo 'permission denied' >&2; exit 255"])
 
+    def test_local_setup_does_not_require_ssh_to_itself(self):
+        with patch.object(voice, 'run', return_value='CODEX_VOICE={"codex":"/bin/codex"}\n') as run:
+            mic = voice.probe(None)
+            self.assertTrue(mic['local'])
+            self.assertEqual(run.call_args.args[0][0], sys.executable)
+        mic.update(platform='darwin')
+        with patch.object(voice.subprocess, 'run') as execute:
+            voice.prepare_desktop(mic)
+            execute.assert_not_called()
+
+    def test_local_pairing_survives_hostname_changes_without_connecting_elsewhere(self):
+        (self.root / 'config.json').write_text(json.dumps({'local': True, 'hostname': 'old-name'}))
+        with patch.object(voice, 'config_dir', return_value=self.root), \
+             patch.object(voice, 'run', return_value='{"result":{"plugins":[{"enabled":true}]}}'), \
+             patch.object(voice.shutil, 'which', return_value='/bin/codex'), \
+             patch.object(sys.stdin, 'isatty', return_value=True), \
+             patch.object(sys.stdout, 'isatty', return_value=True), \
+             patch.object(os, 'execv', side_effect=SystemExit) as execute:
+            with self.assertRaises(SystemExit):
+                voice.connect([])
+            execute.assert_called_once_with('/bin/codex', ['/bin/codex'])
+
     def test_reinstall_refreshes_standalone_launcher(self):
         source = self.root / "source.py"
         for version in ("old", "new"):

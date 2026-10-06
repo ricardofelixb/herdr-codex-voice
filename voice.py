@@ -2,6 +2,7 @@
 """Native Codex frontend on a microphone host; backend stays in the current pane."""
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -89,8 +90,8 @@ def integrate(path, launcher=None):
         path.write_text(text)
 
 
-def probe(host):
-    if not re.fullmatch(r"[\w.@:\[\]-]+", host) or host.startswith("-"):
+def probe(host, root=None):
+    if host is not None and (not re.fullmatch(r"[\w.@:\[\]-]+", host) or host.startswith("-")):
         raise ValueError("Use an SSH alias or user@Tailscale-name; put ports and keys in ~/.ssh/config")
     code = '''import json, os, shutil, socket, sys
 codex = shutil.which("codex")
@@ -106,12 +107,21 @@ print("CODEX_VOICE=" + json.dumps({"codex": os.path.join(os.path.realpath(os.pat
     # itself does not define it. Only setup loads these interactive profiles.
     command = 'NO_HERDR=1 "${SHELL:-/bin/sh}" -lic ' + shlex.quote(
         "python3 -c " + shlex.quote(code))
-    output = run([*SSH, "-nT", host, command])
+    try:
+        output = run([sys.executable, "-c", code] if host is None else [*SSH, "-nT", host, command])
+    except RuntimeError as unix_error:
+        if host is None:
+            raise
+        try:
+            mic = load_audio(root).probe(host, SSH, run)
+        except RuntimeError as error:
+            raise RuntimeError(f"{unix_error}\nWindows check: {error}") from None
+        return {"host": host, "local": False, **mic}
     lines = [line.removeprefix("CODEX_VOICE=") for line in output.splitlines()
              if line.startswith("CODEX_VOICE=")]
     if not lines:
         raise RuntimeError("Could not find Codex and Python 3 in the microphone computer's login shell")
-    return {"host": host, **json.loads(lines[-1])}
+    return {"host": host or "local", "local": host is None, **json.loads(lines[-1])}
 
 
 def backend(codex):
@@ -126,9 +136,7 @@ def desktop_revision(root):
     return hashlib.sha256((Path(root) / "macos.py").read_bytes()).hexdigest()
 
 
-def prepare_desktop(mic, root=None):
-    if mic.get("platform") != "darwin":
-        return
+def plugin_root(root=None):
     root = root or os.environ.get("HERDR_PLUGIN_ROOT")
     if not root:
         plugins = json.loads(run([os.environ.get("HERDR_BIN_PATH", "herdr"), "plugin", "list",
@@ -136,6 +144,24 @@ def prepare_desktop(mic, root=None):
         if not plugins:
             raise RuntimeError("Install or link the Herdr plugin before setup")
         root = plugins[0]["plugin_root"]
+    return root
+
+
+def load_audio(root=None):
+    spec = importlib.util.spec_from_file_location("audio_host", Path(plugin_root(root)) / "audio_host.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def prepare_windows(mic, root=None):
+    load_audio(root).prepare(mic, shutil.which("codex"), SSH, run)
+
+
+def prepare_desktop(mic, root=None):
+    if mic.get("platform") != "darwin" or mic.get("local"):
+        return
+    root = plugin_root(root)
     source = (Path(root) / "macos.py").read_bytes()
     revision = hashlib.sha256(source).hexdigest()
     mic["desktop_helper"] = str(Path(mic["desktop_root"]) / "helpers" / revision / "macos.py")
@@ -162,15 +188,18 @@ with (path.parents[2]/"setup.lock").open("a") as lock:
 
 def setup(host=None):
     host = host or input("Microphone computer's SSH alias or user@Tailscale-name: ").strip()
-    mic = probe(host)
+    mic = probe(None if host == "--local" else host)
     codex = shutil.which("codex")
     if not codex:
         raise RuntimeError("Install Codex CLI on this work computer first")
-    backend(codex)
+    if not mic.get("local") and mic.get("platform") != "win32":
+        backend(codex)
     prepare_desktop(mic)
+    if mic.get("platform") == "win32":
+        prepare_windows(mic)
     launcher = install()
     write_private(config_dir() / "config.json", json.dumps(mic, indent=2) + "\n")
-    print(f"Saved microphone computer: {host}")
+    print("Enabled this computer's microphone" if mic.get("local") else f"Saved microphone computer: {host}")
     path = shell_file()
     if path:
         integrate(path, launcher)
@@ -256,9 +285,17 @@ def connect(args):
     if not path.exists():
         raise RuntimeError("Run codex-voice setup once to choose your microphone computer")
     mic = json.loads(path.read_text())
-    if mic["hostname"] == socket.gethostname():
+    if mic.get("local") or (mic.get("platform") != "win32" and mic["hostname"] == socket.gethostname()):
         os.execv(codex, [codex, *args])
     root = plugins[0]["plugin_root"]
+    if mic.get("platform") == "win32":
+        audio = load_audio(root)
+        if audio.stale(mic, codex):
+            mic = probe(mic["host"], root)
+            prepare_windows(mic, root)
+            write_private(path, json.dumps(mic, indent=2) + "\n")
+        audio.run_codex(mic, codex, args, [shutil.which("ssh"), *SSH[1:]],
+                        config_dir() / "windows-voice-packages")
     if "platform" not in mic or (mic["platform"] == "darwin" and mic.get("desktop_revision") != desktop_revision(root)):
         mic = probe(mic["host"])
         prepare_desktop(mic, root)
@@ -285,6 +322,7 @@ def main():
         print("Removed shell integration. Open a new terminal to restore your previous codex command.")
     else:
         print("codex-voice setup [SSH-HOST]   Pair once and enable codex in Herdr\n"
+              "codex-voice setup --local     Use this computer's microphone without SSH\n"
               "codex-voice run [CODEX-ARGS]  Run with the saved microphone computer\n"
               "codex-voice unsetup          Remove the shell integration")
 
