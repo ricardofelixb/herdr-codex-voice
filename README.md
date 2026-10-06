@@ -1,10 +1,13 @@
 # Codex Voice for Herdr
 
 Open a remote machine's pane, type `codex`, and use native `/voice`.
-Codex's interface and audio run on your microphone computer. Its backend,
+On a Mac microphone computer, Codex's interface and audio run there. A Windows
+microphone computer runs only the audio helper. In both cases, the backend,
 project files, and commands stay on the work computer you selected in Herdr.
 No helper pane appears on the microphone computer. Normal launches print no
-plugin banner or setup messages.
+plugin banner or setup messages. The custom Herdr canary selects the computer
+you are typing from automatically. Released Herdr asks which microphone to use
+when several are paired.
 
 This is an early release. macOS and Linux are supported work computers; use WSL
 for a Windows work computer. Native Windows work computers and mobile
@@ -12,15 +15,9 @@ microphone hosts are not supported. A native Windows microphone computer is
 experimental; see [Windows microphone](#windows-microphone-experimental).
 Tailscale provides reachability, not audio forwarding or SSH authorization.
 
-Validation so far (manual canaries, not a claim of general readiness): native
-Codex launch through a hidden desktop app, remote command execution, resume,
-resizing, and cleanup after a disconnect without a helper pane. Direct SSH
-launch was rejected by macOS's microphone permission system, so version 0.2 uses
-the desktop app to give macOS a normal application permission context. After
-the user allowed **Codex Voice** microphone access, a MacBook microphone
-captured spoken phrases and a Linux work computer generated replies in an
-isolated frontend. The ordinary Herdr-pane `codex` workflow from a MacBook is
-not yet confirmed to work end to end.
+The macOS route uses a background desktop app to give microphone requests an
+application permission context. Allow **Codex Voice** microphone access during
+first use. Test speech recognition and playback after pairing a new computer.
 
 ## Windows microphone (experimental)
 
@@ -53,17 +50,51 @@ OpenAI. The launcher gives the helper a minimal environment with GStreamer
 plugin discovery disabled. The shim preserves `SSH_AUTH_SOCK` when present;
 no credentials are copied. Old package copies are left in place.
 
-Validation so far: a Windows microphone paired with Linux and macOS (MacBook
-and Mac mini) work computers reached "Voice conversation started" and showed
-changing input levels, and mute, stop and exit worked; on the Macs the commands
-ran in the Mac's own workspace. Not verified: speech recognition and audible
-playback through this route, and the normal Herdr-pane `codex` workflow with
-the plugin's own setup on every machine. This depends on Codex's package
-layout and is unsupported by Codex; other layouts fail with an error. Daemon
+This depends on Codex's package layout and is unsupported by Codex; other
+layouts fail with an error. Test speech recognition and playback on each paired
+Windows computer before relying on it. Daemon
 behavior is Codex's default (an existing shared daemon is reused), because the
-TUI process, not the daemon, starts the voice helper. Switching between several
-microphone computers and a native Windows work computer are not supported yet;
-pair explicitly with setup.
+TUI process, not the daemon, starts the voice helper. A native Windows work
+computer is not supported yet.
+
+## Automatic microphone selection, custom Herdr canary
+
+Save each microphone once on a work computer:
+
+```sh
+codex-voice pair Laptop you@your-laptop
+codex-voice pair PC you@your-windows-pc
+```
+
+With the matching custom Herdr canary on the work computer, type `codex` in its
+normal pane. The plugin selects the microphone on the computer that sent that
+pane's latest keyboard or paste input. Other panes, mouse movement and focus
+changes do not select the microphone. The chosen route stays with that Codex
+session; restart or resume Codex from the new computer when changing devices.
+
+Pairing discovers the microphone computer's stable Tailscale node ID. At launch,
+Herdr reports the pane's input origin, and Tailscale identifies its SSH peer.
+This also handles Tailscale's userspace networking, where SSH sees a loopback
+address and needs the source port to identify the client. No credentials are
+copied. The local computer can be paired with `--local` instead of an SSH host.
+
+This requires the custom server and SSH bridge exposing `pane.last_input`.
+The Herdr modification is currently a separate canary; installing this plugin
+alone does not add that capability. It is not available in released Herdr 0.9.3.
+The canary keeps compatibility with
+existing 0.9.3 clients; those clients reconnect through the updated work host's
+bridge. Unknown, disconnected, API-generated or ambiguous input never silently
+selects a microphone on the canary. Reconnect an old bridge or refresh the
+pairing if the plugin cannot identify the computer.
+
+On released Herdr, the plugin supports an explicit microphone choice in the same
+terminal when several are paired. A single pairing still starts without a
+question. Utility commands never ask or inspect input origin.
+
+Repeat `pair` with the same name to update a pairing. `setup HOST` refreshes any
+named pairing using that exact SSH alias. Existing single-host configurations
+are retained, with their named duplicate preferred. No temporary enable script
+is needed; open a new Herdr terminal after first installation.
 
 ## Use this computer's microphone
 
@@ -168,8 +199,10 @@ computer. SSH keys and Codex credentials stay in their existing locations.
   may still need setup again.
 - **Slow Codex startup:** plugin launch is quiet, but Codex's own updates, MCP
   startup, and login prompts still appear. The plugin does not disable them.
-- **Different microphone computer:** rerun setup. Herdr's plugin context does
-  not identify the physical client reliably, so the pairing is explicit.
+- **Different microphone computer:** save it with `codex-voice pair NAME HOST`.
+  The custom Herdr canary selects the typing computer at launch. Released
+  Herdr asks you to choose when several microphones are paired. Restart or
+  resume Codex after switching computers to select the new microphone.
 - **Native remote limitations:** files read by the frontend, including image
   attachments and frontend profiles, must exist on the microphone computer.
   The project directory and agent tools run on the work computer.

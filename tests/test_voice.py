@@ -172,6 +172,7 @@ class VoiceTests(unittest.TestCase):
     def test_other_shells_can_pair_without_an_alias(self):
         mic = {"host": "mic"}
         with patch.object(voice, "probe", return_value=mic), \
+             patch.object(voice, "pair_identity", return_value=None), \
              patch.object(voice, "backend"), patch.object(voice, "shell_file", return_value=None), \
              patch.object(voice.shutil, "which", return_value="/bin/codex"), \
              patch.object(voice, "install", return_value=self.root / "codex-voice"), \

@@ -147,11 +147,19 @@ def plugin_root(root=None):
     return root
 
 
-def load_audio(root=None):
-    spec = importlib.util.spec_from_file_location("audio_host", Path(plugin_root(root)) / "audio_host.py")
+def load_module(name, root=None):
+    spec = importlib.util.spec_from_file_location(name, Path(plugin_root(root)) / (name + ".py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_audio(root=None):
+    return load_module("audio_host", root)
+
+
+def pair_identity(mic):
+    return load_module("client_origin").pair_identity(mic, SSH, run)
 
 
 def prepare_windows(mic, root=None):
@@ -186,7 +194,77 @@ with (path.parents[2]/"setup.lock").open("a") as lock:
     mic["desktop_revision"] = revision
 
 
-def setup(host=None):
+def named_profile(directory, name):
+    if not re.fullmatch(r"[\w -]{1,40}", name, flags=re.ASCII) or not name.strip():
+        raise ValueError("Use a microphone name of 1–40 letters, numbers, spaces, underscores or hyphens")
+    return directory / "microphones" / (hashlib.sha256(name.encode()).hexdigest() + ".json")
+
+
+def microphone_identity(mic, path):
+    if not isinstance(mic, dict) or not isinstance(mic.get("local", False), bool):
+        raise RuntimeError(f"Invalid microphone configuration in {path}: expected a microphone object")
+    for key in ("host", "label", "hostname"):
+        if key in mic and not isinstance(mic[key], str):
+            raise RuntimeError(f"Invalid microphone configuration in {path}: {key} must be text")
+    if mic.get("local"):
+        return ("local",)
+    if not mic.get("host"):
+        raise RuntimeError(f"Invalid microphone configuration in {path}: missing SSH host")
+    return ("ssh", mic["host"])
+
+
+def choose_microphone(directory, select=None):
+    # Named pairings take precedence over the older single-host configuration.
+    # The old file stays intact for rollback and for installs with no pairings.
+    choices = []
+    hosts = set()
+    paths = sorted((directory / "microphones").glob("*.json"))
+    legacy = directory / "config.json"
+    if legacy.exists():
+        paths.append(legacy)
+    for path in paths:
+        mic = json.loads(path.read_text())
+        host = microphone_identity(mic, path)
+        if path != legacy or host not in hosts:
+            hosts.add(host)
+            choices.append((path, mic))
+    if not choices:
+        raise RuntimeError("Run codex-voice setup once to choose your microphone computer")
+    if select is not None:
+        selected = select(choices)
+        if selected is not None:
+            return selected
+    if len(choices) == 1:
+        return choices[0]
+
+    def label(choice):
+        mic = choice[1]
+        value = mic.get("label") or mic.get("hostname") or mic["host"]
+        return "".join(c for c in value if c.isprintable())
+
+    choices.sort(key=lambda choice: label(choice).casefold())
+    print("Which computer's microphone are you using?", file=sys.stderr)
+    for index, choice in enumerate(choices, 1):
+        print(f"  {index}. {label(choice)}", file=sys.stderr)
+    while True:
+        print(f"Choose 1–{len(choices)}, or q to cancel: ", end="", file=sys.stderr, flush=True)
+        answer = sys.stdin.readline()
+        if not answer or answer.strip().lower() == "q":
+            raise KeyboardInterrupt
+        answer = answer.strip()
+        if answer.isascii() and answer.isdecimal() and 1 <= int(answer) <= len(choices):
+            return choices[int(answer) - 1]
+
+
+def setup(host=None, name=None):
+    directory = config_dir()
+    path = named_profile(directory, name) if name is not None else directory / "config.json"
+    paired_profiles = []
+    if name is None:
+        for paired in (directory / "microphones").glob("*.json"):
+            old = json.loads(paired.read_text())
+            microphone_identity(old, paired)
+            paired_profiles.append((paired, old))
     host = host or input("Microphone computer's SSH alias or user@Tailscale-name: ").strip()
     mic = probe(None if host == "--local" else host)
     codex = shutil.which("codex")
@@ -197,8 +275,21 @@ def setup(host=None):
     prepare_desktop(mic)
     if mic.get("platform") == "win32":
         prepare_windows(mic)
+    node = pair_identity(mic)
+    if node:
+        mic["tailscale_node_id"] = node
+    if name is not None:
+        mic["label"] = name
     launcher = install()
-    write_private(config_dir() / "config.json", json.dumps(mic, indent=2) + "\n")
+    write_private(path, json.dumps(mic, indent=2) + "\n")
+    if name is None:
+        # Recovery instructions use `setup HOST`. Refresh every named pairing
+        # for that route too, so an older named copy cannot hide the repair.
+        identity = microphone_identity(mic, path)
+        for paired, old in paired_profiles:
+            if microphone_identity(old, paired) == identity:
+                refreshed = {**mic, **({"label": old["label"]} if "label" in old else {})}
+                write_private(paired, json.dumps(refreshed, indent=2) + "\n")
     print("Enabled this computer's microphone" if mic.get("local") else f"Saved microphone computer: {host}")
     path = shell_file()
     if path:
@@ -281,23 +372,24 @@ def connect(args):
         enabled = False
     if not enabled:
         os.execv(codex, [codex, *args])
-    path = config_dir() / "config.json"
-    if not path.exists():
-        raise RuntimeError("Run codex-voice setup once to choose your microphone computer")
-    mic = json.loads(path.read_text())
+    root = plugins[0].get("plugin_root")
+    select = None
+    if os.environ.get("HERDR_SOCKET_PATH") and os.environ.get("HERDR_PANE_ID"):
+        select = load_module("client_origin", root).select
+    path, mic = choose_microphone(config_dir(), select)
     if mic.get("local") or (mic.get("platform") != "win32" and mic["hostname"] == socket.gethostname()):
         os.execv(codex, [codex, *args])
-    root = plugins[0]["plugin_root"]
+    root = root or plugin_root()
     if mic.get("platform") == "win32":
         audio = load_audio(root)
         if audio.stale(mic, codex):
-            mic = probe(mic["host"], root)
+            mic = {**probe(mic["host"], root), **{key: mic[key] for key in ("label", "tailscale_node_id") if key in mic}}
             prepare_windows(mic, root)
             write_private(path, json.dumps(mic, indent=2) + "\n")
         audio.run_codex(mic, codex, args, [shutil.which("ssh"), *SSH[1:]],
                         config_dir() / "windows-voice-packages")
     if "platform" not in mic or (mic["platform"] == "darwin" and mic.get("desktop_revision") != desktop_revision(root)):
-        mic = probe(mic["host"])
+        mic = {**probe(mic["host"]), **{key: mic[key] for key in ("label", "tailscale_node_id") if key in mic}}
         prepare_desktop(mic, root)
         write_private(path, json.dumps(mic, indent=2) + "\n")
     command = ssh_command(mic, backend(codex), frontend_args(args, os.getcwd()))
@@ -310,6 +402,10 @@ def main():
         print(f"Installed {install()}. Next: codex-voice setup YOUR-MICROPHONE-HOST")
     elif action == "setup":
         setup(args[0] if args else None)
+    elif action == "pair":
+        if len(args) != 2:
+            raise ValueError("Usage: codex-voice pair NAME SSH-HOST (or --local)")
+        setup(args[1], args[0])
     elif action == "run":
         connect(args)
     elif action == "open-setup":
@@ -323,6 +419,7 @@ def main():
     else:
         print("codex-voice setup [SSH-HOST]   Pair once and enable codex in Herdr\n"
               "codex-voice setup --local     Use this computer's microphone without SSH\n"
+              "codex-voice pair NAME HOST    Save a microphone for selection at Codex launch\n"
               "codex-voice run [CODEX-ARGS]  Run with the saved microphone computer\n"
               "codex-voice unsetup          Remove the shell integration")
 
