@@ -12,3 +12,11 @@ jobs:
         with:
           python-version: '3.11'
       - run: python3 -m unittest discover -s tests -v
+      - name: Build and verify Mac desktop helper
+        if: runner.os == 'macOS'
+        run: |
+          python3 - <<'PY'
+          import macos, subprocess
+          macos.install()
+          subprocess.run(['codesign', '--verify', '--strict', str(macos.APP)], check=True)
+          PY
