@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native Codex frontend on a microphone host; backend stays in the current pane."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -91,13 +92,15 @@ def integrate(path, launcher=None):
 def probe(host):
     if not re.fullmatch(r"[\w.@:\[\]-]+", host) or host.startswith("-"):
         raise ValueError("Use an SSH alias or user@Tailscale-name; put ports and keys in ~/.ssh/config")
-    code = '''import json, os, shutil, socket
+    code = '''import json, os, shutil, socket, sys
 codex = shutil.which("codex")
 if not codex: raise SystemExit("Install Codex CLI on the microphone computer first")
 node = shutil.which("node")
 print("CODEX_VOICE=" + json.dumps({"codex": os.path.join(os.path.realpath(os.path.dirname(codex)), os.path.basename(codex)),
  "node_dir": os.path.dirname(os.path.realpath(node)) if node else "",
- "hostname": socket.gethostname(), "codex_home": os.environ.get("CODEX_HOME", "")}))
+ "hostname": socket.gethostname(), "codex_home": os.environ.get("CODEX_HOME", ""),
+ "platform": sys.platform, "python": sys.executable,
+ "desktop_root": os.path.expanduser("~/.local/share/herdr-codex-voice")}))
 '''
     # NO_HERDR is an opt-out for shell snippets that auto-attach over SSH; Herdr
     # itself does not define it. Only setup loads these interactive profiles.
@@ -119,6 +122,43 @@ def backend(codex):
     return path
 
 
+def desktop_revision(root):
+    return hashlib.sha256((Path(root) / "macos.py").read_bytes()).hexdigest()
+
+
+def prepare_desktop(mic, root=None):
+    if mic.get("platform") != "darwin":
+        return
+    root = root or os.environ.get("HERDR_PLUGIN_ROOT")
+    if not root:
+        plugins = json.loads(run([os.environ.get("HERDR_BIN_PATH", "herdr"), "plugin", "list",
+                                  "--plugin", PLUGIN, "--json"]))["result"]["plugins"]
+        if not plugins:
+            raise RuntimeError("Install or link the Herdr plugin before setup")
+        root = plugins[0]["plugin_root"]
+    source = (Path(root) / "macos.py").read_text()
+    revision = hashlib.sha256(source.encode()).hexdigest()
+    mic["desktop_helper"] = str(Path(mic["desktop_root"]) / "helpers" / revision / "macos.py")
+    bootstrap = '''import fcntl, pathlib, subprocess, sys
+path=pathlib.Path(sys.argv[1])
+path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+with (path.parents[2]/"setup.lock").open("a") as lock:
+ fcntl.flock(lock,fcntl.LOCK_EX)
+ temporary=path.with_suffix(".tmp")
+ temporary.write_text(sys.stdin.read())
+ temporary.chmod(0o600)
+ temporary.replace(path)
+ sys.exit(subprocess.run([sys.executable,str(path),"install"]).returncode)
+'''
+    command = shlex.join([mic["python"], "-c", bootstrap, mic["desktop_helper"]])
+    # Compilation happens once per helper revision, never during normal launch.
+    result = subprocess.run([*SSH, "-T", mic["host"], command], input=source, text=True,
+                            capture_output=True, timeout=180)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "Could not install the microphone Mac's desktop helper")
+    mic["desktop_revision"] = revision
+
+
 def setup(host=None):
     host = host or input("Microphone computer's SSH alias or user@Tailscale-name: ").strip()
     mic = probe(host)
@@ -126,6 +166,7 @@ def setup(host=None):
     if not codex:
         raise RuntimeError("Install Codex CLI on this work computer first")
     backend(codex)
+    prepare_desktop(mic)
     launcher = install()
     write_private(config_dir() / "config.json", json.dumps(mic, indent=2) + "\n")
     print(f"Saved microphone computer: {host}")
@@ -180,10 +221,15 @@ def ssh_command(mic, backend_socket, args):
         env.append("PATH=" + mic["node_dir"] + ":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
     if mic["codex_home"]:
         env.append("CODEX_HOME=" + mic["codex_home"])
-    missing = "Codex moved; rerun codex-voice setup " + mic["host"]
-    frontend = shlex.join([*env, mic["codex"], "--remote", "unix://" + remote_socket, *args])
+    missing = "Codex or its voice helper moved; rerun codex-voice setup " + mic["host"]
+    executable = [mic["codex"]]
+    available = "test -x " + shlex.quote(mic["codex"])
+    if mic.get("platform") == "darwin":
+        executable = [mic["python"], mic["desktop_helper"], *executable]
+        available += f" && test -x {shlex.quote(mic['python'])} && test -f {shlex.quote(mic['desktop_helper'])}"
+    frontend = shlex.join([*env, *executable, "--remote", "unix://" + remote_socket, *args])
     command = (f"trap {cleanup} EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; "
-               f"test -x {shlex.quote(mic['codex'])} || {{ printf '%s\\n' {shlex.quote(missing)} >&2; exit 127; }}; "
+               f"{available} || {{ printf '%s\\n' {shlex.quote(missing)} >&2; exit 127; }}; "
                + frontend)
     # OpenSSH's default StreamLocalBindMask 0177 restricts this socket to its owner.
     return [*SSH, "-o", "ExitOnForwardFailure=yes", "-o", "EscapeChar=none",
@@ -211,6 +257,11 @@ def connect(args):
     mic = json.loads(path.read_text())
     if mic["hostname"] == socket.gethostname():
         os.execv(codex, [codex, *args])
+    root = plugins[0]["plugin_root"]
+    if "platform" not in mic or (mic["platform"] == "darwin" and mic.get("desktop_revision") != desktop_revision(root)):
+        mic = probe(mic["host"])
+        prepare_desktop(mic, root)
+        write_private(path, json.dumps(mic, indent=2) + "\n")
     command = ssh_command(mic, backend(codex), frontend_args(args, os.getcwd()))
     os.execvp(command[0], command)
 
