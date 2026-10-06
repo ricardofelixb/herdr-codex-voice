@@ -12,12 +12,15 @@ microphone hosts are not supported. A native Windows microphone computer is
 experimental; see [Windows microphone](#windows-microphone-experimental).
 Tailscale provides reachability, not audio forwarding or SSH authorization.
 
-The Linux-to-macOS canary has verified native Codex launch through a hidden
-desktop app, remote command execution, resume, resizing, and cleanup after a
-disconnect without a helper pane. The original direct SSH launch was rejected
-by macOS's microphone permission system. Version 0.2 uses the desktop app to give macOS a normal
-application permission context. A voice conversation still awaits a microphone
-on the Mac mini canary; do not treat audio as fully validated yet.
+Validation so far (manual canaries, not a claim of general readiness): native
+Codex launch through a hidden desktop app, remote command execution, resume,
+resizing, and cleanup after a disconnect without a helper pane. Direct SSH
+launch was rejected by macOS's microphone permission system, so version 0.2 uses
+the desktop app to give macOS a normal application permission context. After
+the user allowed **Codex Voice** microphone access, a MacBook microphone
+captured spoken phrases and a Linux work computer generated replies in an
+isolated frontend. The ordinary Herdr-pane `codex` workflow from a MacBook is
+not yet confirmed to work end to end.
 
 ## Windows microphone (experimental)
 
@@ -30,15 +33,17 @@ decoding follows the frontend's OS), so this route avoids a remote frontend.
 Requirements, besides the SSH and Python ones below: a Windows OpenSSH server
 whose sessions start in the user's home directory, Python 3 reachable as `py -3`
 or `python`, and a Codex install on the PC with **exactly the same build** as the
-work computer's standalone Codex (`codex-voice-host --build-commit` must match,
-not just the version). Setup selects an already-installed matching helper
+work computer's Codex (`codex-voice-host --build-commit` must match, not just
+the version). The work computer's Codex may be a standalone install or the
+official npm `@openai/codex` package; for npm, the native platform package
+behind `codex.js` is located the way the wrapper does and used as is. Setup selects an already-installed matching helper
 (standalone, app-server package, or npm vendor); if none matches it stops with
 the builds it found. It never upgrades Codex, downloads executables, or skips
 the check. When the work computer's Codex changes, the next launch refreshes
 the pairing or fails with the same message.
 
 How it works: setup writes one small launcher under `~/.herdr-codex-voice` on
-the PC. Each launch runs native `codex --no-daemon` from a private,
+the PC. Each launch runs native `codex` with your arguments from a private,
 content-addressed copy of the work computer's Codex package under the plugin's
 config directory. Files are hardlinked (copied if that fails) and only the
 copy's `codex-voice-host` is replaced by a shim that execs one `ssh -T` to the
@@ -48,13 +53,23 @@ OpenAI. The launcher gives the helper a minimal environment with GStreamer
 plugin discovery disabled. The shim preserves `SSH_AUTH_SOCK` when present;
 no credentials are copied. Old package copies are left in place.
 
-Validation so far: a Windows microphone paired with a Linux work computer
-reached "Voice conversation started" and showed changing input levels, then
-stopped cleanly. Not verified: speech recognition, audible playback, and a
-macOS work computer. This depends on Codex's package layout and is unsupported
-by Codex; unsupported layouts (for example npm installs on the work computer)
-fail with an error. Switching between several microphone computers and a native
-Windows work computer are not supported yet; pair explicitly with setup.
+Validation so far: a Windows microphone paired with Linux and macOS (MacBook
+and Mac mini) work computers reached "Voice conversation started" and showed
+changing input levels, and mute, stop and exit worked; on the Macs the commands
+ran in the Mac's own workspace. Not verified: speech recognition and audible
+playback through this route, and the normal Herdr-pane `codex` workflow with
+the plugin's own setup on every machine. This depends on Codex's package
+layout and is unsupported by Codex; other layouts fail with an error. Daemon
+behavior is Codex's default (an existing shared daemon is reused), because the
+TUI process, not the daemon, starts the voice helper. Switching between several
+microphone computers and a native Windows work computer are not supported yet;
+pair explicitly with setup.
+
+## Use this computer's microphone
+
+When Herdr runs on the same computer whose microphone you want, run
+`codex-voice setup --local`. It needs no SSH, saves the pairing, and `codex`
+then runs directly in Herdr panes on this computer.
 
 ## Install once per work computer
 

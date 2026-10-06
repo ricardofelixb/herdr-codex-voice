@@ -101,13 +101,50 @@ def probe(host, ssh, run):
     raise RuntimeError(errors[-1] if errors else "no Python 3 found")
 
 
+# Mirrors codex.js: the wrapper's own Node picks the platform package.
+NODE_RESOLVE = """const {createRequire} = require("module");
+const os = process.platform === "android" ? "linux" : process.platform, arch = process.arch;
+let path = null;
+try { path = createRequire(process.argv[1]).resolve("@openai/codex-" + os + "-" + arch + "/package.json"); } catch {}
+console.log(JSON.stringify({os, arch, path}));"""
+TRIPLES = {("linux", "x64"): "x86_64-unknown-linux-musl", ("linux", "arm64"): "aarch64-unknown-linux-musl",
+           ("darwin", "x64"): "x86_64-apple-darwin", ("darwin", "arm64"): "aarch64-apple-darwin"}
+
+
+def npm_native(wrapper):
+    """Find the native executable behind the official npm wrapper, as its codex.js does."""
+    root = wrapper.parent.parent
+    try:
+        official = json.loads((root / "package.json").read_text()).get("name") == "@openai/codex"
+    except (OSError, ValueError):
+        official = False
+    node = shutil.which("node")
+    if wrapper.parent.name != "bin" or not official or not node:
+        raise RuntimeError("This Codex install layout is not supported for Windows voice")
+    try:
+        result = subprocess.run([node, "-e", NODE_RESOLVE, str(wrapper)], stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=10, check=True)
+        found = json.loads(result.stdout)
+        triple = TRIPLES[found["os"], found["arch"]]
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        raise RuntimeError("Could not determine Codex's native package; this platform is not supported") from None
+    # Once resolved, that package alone is used, as codex.js does; no other is tried.
+    vendor = (Path(found["path"]).parent if found["path"] else root) / "vendor"
+    native = vendor / triple / "bin" / "codex"
+    if not native.is_file():
+        raise RuntimeError(f"Codex's native executable {native} is missing; reinstall Codex")
+    return Path(os.path.realpath(native))
+
+
 def work_package(codex):
     """Return the installed Codex package and its exact build commit."""
     real = Path(os.path.realpath(codex))
+    if real.name == "codex.js":
+        real = npm_native(real)
     package = real.parent.parent
     helper = package / HELPER
     if real.name != "codex" or real.parent.name != "bin" or not helper.is_file():
-        raise RuntimeError("Windows microphone mode needs a standalone Codex package with "
+        raise RuntimeError("Windows microphone mode needs a Codex package with "
                            "codex-resources/voice; this Codex install layout is not supported")
     result = subprocess.run([str(helper), "--build-commit"], stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, timeout=10)
@@ -204,4 +241,4 @@ def run_codex(mic, codex, args, ssh, cache):
         raise RuntimeError("OpenSSH client not found")
     argv = [*ssh, "-o", "ControlPath=none", "-T", mic["host"], mic["audio"]["command"]]
     executable = str(prepare_package(package, commit, argv, cache, os.environ.get("SSH_AUTH_SOCK")))
-    os.execv(executable, [executable, "--no-daemon", *args])
+    os.execv(executable, [executable, *args])

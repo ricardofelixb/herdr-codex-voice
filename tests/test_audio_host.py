@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -92,7 +93,7 @@ class AudioHostTests(unittest.TestCase):
         with patch.object(os, "execv") as execute:
             audio_host.run_codex(mic, str(codex), args, ["/usr/bin/ssh"], self.cache)
         exe = execute.call_args.args[0]
-        self.assertEqual(execute.call_args.args[1], [exe, "--no-daemon", *args])
+        self.assertEqual(execute.call_args.args[1], [exe, *args])
         self.assertTrue(exe.startswith(str(self.cache)))
         shim = Path(exe).parent.parent / audio_host.HELPER
         self.assertIn("'py -3 .herdr-codex-voice/host-x.py'", shim.read_text())
@@ -105,6 +106,67 @@ class AudioHostTests(unittest.TestCase):
         script(npm, "")
         with self.assertRaisesRegex(RuntimeError, "not supported"):
             audio_host.work_package(str(npm))
+
+    def node_target(self):
+        info = subprocess.run(["node", "-p", "JSON.stringify([process.platform, process.arch])"],
+                              capture_output=True, text=True, check=True).stdout
+        return audio_host.TRIPLES[tuple(json.loads(info))], "codex-" + "-".join(json.loads(info))
+
+    def npm_install(self, official=True):
+        root = self.root / "lib/node_modules/@openai/codex"
+        script(root / "bin/codex.js", "")
+        (root / "package.json").write_text(json.dumps({"name": "@openai/codex" if official else "other"}))
+        (self.root / "bin").mkdir(exist_ok=True)
+        link = self.root / "bin/codex"
+        link.symlink_to(root / "bin/codex.js")
+        return link, root
+
+    def native(self, directory, with_executable=True):
+        triple, _ = self.node_target()
+        (directory).mkdir(parents=True)
+        (directory / "package.json").write_text("{}")
+        vendor = directory / "vendor" / triple
+        if with_executable:
+            shutil.copytree(self.package, vendor, symlinks=True)
+        return vendor
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node like the npm wrapper")
+    def test_npm_wrapper_resolves_native_package_nested_or_hoisted(self):
+        _, name = self.node_target()
+        for layout in ("nested", "hoisted"):
+            shutil.rmtree(self.root / "lib", ignore_errors=True)
+            shutil.rmtree(self.root / "bin", ignore_errors=True)
+            link, root = self.npm_install()
+            directory = root / "node_modules/@openai" / name if layout == "nested" else root.parent / name
+            vendor = self.native(directory)
+            with self.subTest(layout):
+                package, commit = audio_host.work_package(str(link))
+                self.assertEqual((package, commit), (vendor.resolve(), COMMIT))
+                exe = audio_host.prepare_package(package, commit, ["ssh"], self.cache)
+                self.assertTrue((exe.parent.parent / audio_host.HELPER).read_text().startswith("#!"))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node like the npm wrapper")
+    def test_npm_wrapper_fallback_vendor_directory(self):
+        link, root = self.npm_install()
+        triple, _ = self.node_target()
+        shutil.copytree(self.package, root / "vendor" / triple, symlinks=True)
+        self.assertEqual(audio_host.work_package(str(link))[0], (root / "vendor" / triple).resolve())
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node like the npm wrapper")
+    def test_npm_wrapper_never_falls_through_to_another_package(self):
+        _, name = self.node_target()
+        link, root = self.npm_install()
+        self.native(root / "node_modules/@openai" / name, with_executable=False)
+        self.native(root.parent / name)  # an older hoisted build Codex itself would not use
+        with self.assertRaisesRegex(RuntimeError, "native executable .* is missing"):
+            audio_host.work_package(str(link))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node like the npm wrapper")
+    def test_unofficial_wrapper_is_rejected(self):
+        link, root = self.npm_install(official=False)
+        self.native(root.parent / self.node_target()[1])
+        with self.assertRaisesRegex(RuntimeError, "not supported"):
+            audio_host.work_package(str(link))
 
     def mic(self, helpers):
         return {"host": "pc", "python": "py -3", "home_is_cwd": True, "helpers": helpers}
