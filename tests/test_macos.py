@@ -117,13 +117,13 @@ class MacDesktopTests(unittest.TestCase):
         def ssh(argv, **kwargs):
             return execute(['sh', '-c', argv[-1]], **kwargs)
         paths = []
-        for version in ('old', 'new'):
-            source = '# ' + version + '\n'
-            (self.root / 'macos.py').write_text(source)
+        for source in (b'# old\n', b'# new\r\n'):
+            (self.root / 'macos.py').write_bytes(source)
             with patch.object(voice.subprocess, 'run', side_effect=ssh):
                 voice.prepare_desktop(mic, self.root)
             paths.append(Path(mic['desktop_helper']))
-            self.assertEqual(paths[-1].read_text(), source)
+            self.assertEqual(paths[-1].read_bytes(), source)
+            self.assertEqual(mic['desktop_revision'], voice.desktop_revision(self.root))
             self.assertEqual(paths[-1].stat().st_mode & 0o777, 0o600)
         self.assertNotEqual(*paths)
         self.assertEqual(paths[0].read_text(), '# old\n')

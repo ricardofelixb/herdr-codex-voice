@@ -136,8 +136,8 @@ def prepare_desktop(mic, root=None):
         if not plugins:
             raise RuntimeError("Install or link the Herdr plugin before setup")
         root = plugins[0]["plugin_root"]
-    source = (Path(root) / "macos.py").read_text()
-    revision = hashlib.sha256(source.encode()).hexdigest()
+    source = (Path(root) / "macos.py").read_bytes()
+    revision = hashlib.sha256(source).hexdigest()
     mic["desktop_helper"] = str(Path(mic["desktop_root"]) / "helpers" / revision / "macos.py")
     bootstrap = '''import fcntl, pathlib, subprocess, sys
 path=pathlib.Path(sys.argv[1])
@@ -145,17 +145,18 @@ path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
 with (path.parents[2]/"setup.lock").open("a") as lock:
  fcntl.flock(lock,fcntl.LOCK_EX)
  temporary=path.with_suffix(".tmp")
- temporary.write_text(sys.stdin.read())
+ temporary.write_bytes(sys.stdin.buffer.read())
  temporary.chmod(0o600)
  temporary.replace(path)
  sys.exit(subprocess.run([sys.executable,str(path),"install"]).returncode)
 '''
     command = shlex.join([mic["python"], "-c", bootstrap, mic["desktop_helper"]])
     # Compilation happens once per helper revision, never during normal launch.
-    result = subprocess.run([*SSH, "-T", mic["host"], command], input=source, text=True,
+    result = subprocess.run([*SSH, "-T", mic["host"], command], input=source,
                             capture_output=True, timeout=180)
     if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Could not install the microphone Mac's desktop helper")
+        raise RuntimeError(result.stderr.decode(errors="replace").strip()
+                           or "Could not install the microphone Mac's desktop helper")
     mic["desktop_revision"] = revision
 
 
