@@ -67,6 +67,14 @@ INFO = {"CFBundleIdentifier": "dev.herdr.codex-voice", "CFBundleName": "Codex Vo
 ENTITLEMENTS = {"com.apple.security.device.audio-input": True}
 DIGEST = hashlib.sha256(SWIFT.encode() + plistlib.dumps(INFO) + plistlib.dumps(ENTITLEMENTS)).hexdigest()
 APP = ROOT / "apps" / DIGEST / "Codex Voice.app"
+# Asked from a child of the app, so macOS answers for Codex Voice's own
+# permission. Querying never prompts; "soun" is AVMediaTypeAudio. JXA does not
+# bridge AVCaptureDevice by name, so load the framework and look the class up.
+PERMISSION = ("ObjC.import('Foundation');"
+              "$.NSBundle.bundleWithPath('/System/Library/Frameworks/AVFoundation.framework').load;"
+              "var device = $.NSClassFromString('AVCaptureDevice');"
+              "device.isNil() ? -1 : device.authorizationStatusForMediaType($('soun'))")
+PERMISSIONS = {"0": "not_determined", "1": "restricted", "2": "denied", "3": "authorized"}
 
 
 def check_desktop():
@@ -109,7 +117,7 @@ def send_signal(root, sig):
         pass
 
 
-def launch(program, args):
+def launch(program, args, tty=None):
     check_desktop()
     if not APP.exists():
         raise RuntimeError("Desktop helper is missing; rerun codex-voice setup on the work computer")
@@ -117,7 +125,7 @@ def launch(program, args):
         root = Path(directory)
         job = root / "job.json"
         job.write_text(json.dumps({"program": program, "args": args, "env": dict(os.environ),
-                                   "tty": os.ttyname(0), "owner": os.getpid()}))
+                                   "tty": tty or os.ttyname(0), "owner": os.getpid()}))
         job.chmod(0o600)
         def interrupted(sig, frame):
             raise SystemExit(128 + sig)
@@ -159,10 +167,35 @@ def launch(program, args):
                     send_signal(root, signal.SIGKILL)
 
 
+def status():
+    """Read-only desktop session, app and microphone permission state for diagnostics."""
+    result = {"desktop_session": True, "app_installed": (APP / "Contents/MacOS/desktop-runner").is_file(),
+              "microphone": "unknown"}
+    try:
+        check_desktop()
+    except (OSError, RuntimeError):
+        result["desktop_session"] = False
+    if not (result["desktop_session"] and result["app_installed"]):
+        return result
+    with tempfile.TemporaryDirectory(prefix="hcv-status-", dir="/tmp") as directory:
+        # The app's child writes to this file the way Codex writes to the SSH terminal.
+        output = Path(directory) / "output"
+        output.touch(mode=0o600)
+        try:
+            code = launch("/usr/bin/osascript", ["-l", "JavaScript", "-e", PERMISSION], tty=str(output))
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return result
+        if code == 0:
+            result["microphone"] = PERMISSIONS.get(output.read_text().strip(), "unknown")
+    return result
+
+
 if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["install"]:
             install()
+        elif sys.argv[1:] == ["status"]:
+            print("CODEX_VOICE_STATUS=" + json.dumps(status()))
         else:
             sys.exit(launch(sys.argv[1], sys.argv[2:]))
     except subprocess.CalledProcessError as error:

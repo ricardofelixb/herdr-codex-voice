@@ -195,19 +195,31 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(path.read_text(), "export A=1\nexport B=2\n")
 
     def test_setup_popup_keeps_errors_visible_until_enter(self):
+        import pty
         env = {**os.environ, "HERDR_PLUGIN_ENTRYPOINT_ID": "setup"}
+        terminal, child_terminal = pty.openpty()
+        self.addCleanup(os.close, terminal)
         with subprocess.Popen([sys.executable, voice.__file__, "setup", "-bad"], env=env,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stdin=child_terminal, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True) as process:
+            os.close(child_terminal)
             line = process.stdout.readline()
             self.assertIn("Codex Voice:", line)
             self.assertIsNone(process.poll())
-            process.stdin.write("\n")
-            process.stdin.close()
+            os.write(terminal, b"\n")
             process.wait(timeout=5)
             output = process.stdout.read()
             self.assertEqual(process.returncode, 1)
             self.assertIn("Press Enter to close.", output)
+
+    def test_setup_popup_never_prompts_json_or_non_interactive_callers(self):
+        env = {**os.environ, "HERDR_PLUGIN_ENTRYPOINT_ID": "setup"}
+        for args in (["setup", "--json"], ["setup", "-bad"]):
+            result = subprocess.run([sys.executable, voice.__file__, *args], env=env, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertNotIn("Press Enter", result.stdout + result.stderr)
+            if "--json" in args:
+                self.assertEqual((result.returncode, json.loads(result.stdout)["error"]["code"]), (2, "usage"))
 
     def test_ctrl_c_before_frontend_start_removes_socket(self):
         fake = self.root / "codex"

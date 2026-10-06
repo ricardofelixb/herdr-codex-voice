@@ -276,6 +276,30 @@ raise SystemExit(subprocess.call([{sys.executable!r}, {str(launcher)!r}]))
         quiet = subprocess.run([str(shim)], input=b"", capture_output=True, env=env, timeout=60)
         self.assertEqual((quiet.returncode, quiet.stdout), (7, b""))
 
+    def test_diagnose_reads_the_installed_launcher_without_changing_it(self):
+        helper = script(self.root / "dir with space/codex-voice-host.exe", f"print({COMMIT!r})\n")
+        home = self.root / "winhome"
+        home.mkdir()
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+
+        def windows(argv, input):
+            return subprocess.run([sys.executable, "-"], input=input, capture_output=True, text=True,
+                                  env=env, check=True).stdout
+
+        mic = {"host": "pc", "python": "py -3", "home_is_cwd": True,
+               "helpers": [{"path": str(helper), "build_commit": COMMIT}]}
+        audio_host.prepare(mic, str(self.package / "bin/codex"), ["ssh"], windows)
+        before = {p: p.read_bytes() for p in home.rglob("*") if p.is_file()}
+        data = audio_host.diagnose(mic, ["ssh"], windows)
+        self.assertEqual((data["launcher_found"], data["helper_found"], data["build_commit"]), (True, True, COMMIT))
+        if sys.platform != "win32":
+            self.assertIsNone(data["privacy"])
+        self.assertEqual({p: p.read_bytes() for p in home.rglob("*") if p.is_file()}, before)
+        helper.unlink()
+        self.assertEqual(audio_host.diagnose(mic, ["ssh"], windows)["helper_found"], False)
+        shutil.rmtree(home / audio_host.REMOTE_DIR)
+        self.assertEqual(audio_host.diagnose(mic, ["ssh"], windows)["launcher_found"], False)
+
     def test_launcher_reports_moved_helper(self):
         source = f"HELPER = {str(self.root / 'gone')!r}\nHOST = 'pc'\n" + audio_host.LAUNCHER
         result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True)

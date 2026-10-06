@@ -16,7 +16,19 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python3 - <<'PY'
-          import macos, subprocess
-          macos.install()
-          subprocess.run(['codesign', '--verify', '--strict', str(macos.APP)], check=True)
+          import macos, macos_audio, subprocess
+          for module in (macos, macos_audio):
+              module.install()
+              subprocess.run(['codesign', '--verify', '--strict', str(module.APP)], check=True)
           PY
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: cargo test --locked --offline --manifest-path windows/relay/Cargo.toml
+      - run: cargo build --release --locked --offline --manifest-path windows/relay/Cargo.toml
+      # Only tests that need no Unix sockets, shebang executables or Bash; they include real PowerShell.
+      - run: python -m unittest tests.test_windows_host.RelayConfigTests tests.test_windows_host.WindowsLauncherTests -v

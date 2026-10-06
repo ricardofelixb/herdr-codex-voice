@@ -91,5 +91,69 @@ class ClientOriginTests(unittest.TestCase):
         self.assertIn("input", run.call_args.kwargs)
 
 
+class WindowsCliTests(unittest.TestCase):
+    """On Windows HERDR_SOCKET_PATH names a pipe, so the plugin asks Herdr's own CLI."""
+
+    def setUp(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.log, self.answers = root / "herdr.log", root / "answers.json"
+        herdr = root / "herdr"
+        herdr.write_text(f'''#!{sys.executable}
+import json, sys
+open({str(self.log)!r}, "a").write(json.dumps(sys.argv[1:]) + "\\n")
+answers = json.load(open({str(self.answers)!r}))
+key = " ".join(sys.argv[1:3])
+if key not in answers:
+    sys.exit(2)
+print(json.dumps(answers[key]))
+''')
+        herdr.chmod(0o755)
+        self.context = {"type": "pane_last_input", "pane_id": "w1:p1", "last_input": {
+            "source": "client", "client": {"connected": True, "via": "ssh_bridge",
+                                           "ssh_connection": "100.64.0.2 51000 100.64.0.3 22"}}}
+        self.answer({"running": True, "capabilities": {"pane_last_input": True}}, self.context)
+        for change in (patch.dict(os.environ, {"HERDR_BIN_PATH": str(herdr), "HERDR_PANE_ID": "w1:p1",
+                                               "HERDR_SOCKET_PATH": r"C:\Users\me\AppData\herdr\herdr.sock"}),
+                       patch.object(client_origin.sys, "platform", "win32"),
+                       patch.object(client_origin, "rpc", side_effect=AssertionError("no Unix socket on Windows"))):
+            change.start()
+            self.addCleanup(change.stop)
+        self.choices = [(Path("mac"), {"tailscale_node_id": "node-mac"}), (Path("pc"), {"local": True})]
+
+    def answer(self, status, context):
+        self.answers.write_text(json.dumps({"status server": status,
+                                            "pane last-input": {"id": "1", "result": context}}))
+
+    def calls(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def test_typing_computer_is_found_through_the_cli(self):
+        with patch.object(client_origin, "tailnet_node", return_value="node-mac"):
+            self.assertEqual(client_origin.select(self.choices)[0], Path("mac"))
+        self.assertEqual(self.calls(), [["status", "server", "--json"], ["pane", "last-input", "w1:p1"]])
+        self.assertIs(client_origin.capable(None), True)
+
+    def test_released_herdr_keeps_the_explicit_choice(self):
+        self.answer({"running": True, "capabilities": {"pane_last_input": False}}, None)
+        self.assertIsNone(client_origin.select(self.choices))
+        self.assertIs(client_origin.capable(None), False)
+
+    def test_unavailable_or_unexpected_answers_never_choose(self):
+        for status, context in (({"running": False, "capabilities": {"pane_last_input": True}}, self.context),
+                                ({"running": True, "capabilities": {"pane_last_input": True}},
+                                 {**self.context, "pane_id": "w1:p2"}),
+                                ({"running": True, "capabilities": {"pane_last_input": True}}, None)):
+            self.answer(status, context)
+            with patch.object(client_origin, "tailnet_node", return_value="node-mac"):
+                with self.assertRaises(client_origin.OriginError) as raised:
+                    client_origin.select(self.choices)
+            self.assertEqual(raised.exception.code, "origin_lookup_failed")
+        self.answers.write_text("{}")
+        self.assertIsNone(client_origin.capable(None))
+
+
 if __name__ == "__main__":
     unittest.main()

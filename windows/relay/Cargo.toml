@@ -1,0 +1,13 @@
+[package]
+name = "codex-voice-relay"
+version = "0.5.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Stands in for Codex's voice helper on a Windows work computer and relays it over ssh -T."
+
+# Standard library only, so the build needs no network and the source is the whole program.
+[dependencies]
+
+[profile.release]
+panic = "abort"

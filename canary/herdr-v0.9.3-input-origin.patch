@@ -1,0 +1,1792 @@
+diff --git a/HERDR_VOICE_CANARY_CHANGES.md b/HERDR_VOICE_CANARY_CHANGES.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b16e98e745d29726a1e1b51d99554bb153f4dd9a
+--- /dev/null
++++ b/HERDR_VOICE_CANARY_CHANGES.md
+@@ -0,0 +1,48 @@
++# Community canary modification notice
++
++This source tree is modified from Herdr v0.9.3, commit
++`7b116c05bfda646af39d2524c54e70c751f57ee8`, for the Herdr Codex Voice plugin.
++It is an independent community canary, not an official Herdr release.
++
++Changes dated 2026-10-06 add optional JSON endpoint origin metadata stamped by
++the SSH bridge, process-local per-terminal input attribution, the
++`pane.last_input` API and CLI command, and the `pane_last_input` capability in
++raw ping and CLI status. API input invalidates human attribution. The frozen
++endpoint generation 1 codecs and protocol version 22 are unchanged.
++
++The bridge continues to support empty-stdin server preparation and preserves
++stdin buffering. Focused tests and draft API documentation accompany the change.
++Input origin is local-user metadata, not an authentication boundary. It does not
++survive server restarts or handoff and does not identify arbitrary SSH processes.
++
++Herdr is licensed under Apache-2.0; its original LICENSE and source notices
++remain in this tree. Vendored components keep their own licenses. These
++community changes are provided under Apache-2.0. No upstream endorsement is
++claimed, and this package does not grant rights to upstream trademarks.
++
++Modified or added files:
++
++- `docs/next/api/herdr-api.schema.json`
++- `docs/next/website/src/content/docs/socket-api.mdx`
++- `src/api/schema.rs`
++- `src/api/schema/panes.rs`
++- `src/api/schema/response.rs`
++- `src/api/schema/server.rs`
++- `src/api/schema/tests.rs`
++- `src/api/server.rs`
++- `src/app/api.rs`
++- `src/cli/pane.rs`
++- `src/cli/status.rs`
++- `src/client/handshake.rs`
++- `src/protocol/endpoint.rs`
++- `src/remote/host.rs`
++- `src/server/client_transport.rs`
++- `src/server/clients.rs`
++- `src/server/headless.rs`
++- `src/server/headless/client_views.rs`
++- `src/server/headless/input_origin.rs`
++- `src/server/headless/tests/input_origin.rs`
++- `src/server/headless/tests/mod.rs`
++- `src/server/headless/tests/surface_interest.rs`
++- `src/update.rs`
++- `HERDR_VOICE_CANARY_CHANGES.md`
+diff --git a/docs/next/api/herdr-api.schema.json b/docs/next/api/herdr-api.schema.json
+index e2553f75ff9a24fea89781773a46d68ba6ea3314..601c0eae4263f288c6aa530abd12e56bb66dab07 100644
+--- a/docs/next/api/herdr-api.schema.json
++++ b/docs/next/api/herdr-api.schema.json
+@@ -1,4 +1,5 @@
+ {
++  "$comment": "Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.",
+   "$schema": "https://json-schema.org/draft/2020-12/schema",
+   "protocol": 22,
+   "schema_version": 1,
+@@ -5785,6 +5786,22 @@
+           ],
+           "type": "object"
+         },
++        {
++          "properties": {
++            "method": {
++              "const": "pane.last_input",
++              "type": "string"
++            },
++            "params": {
++              "$ref": "#/schemas/request/$defs/PaneTarget"
++            }
++          },
++          "required": [
++            "method",
++            "params"
++          ],
++          "type": "object"
++        },
+         {
+           "properties": {
+             "method": {
+@@ -7992,6 +8009,65 @@
+           ],
+           "type": "object"
+         },
++        "PaneInputSource": {
++          "enum": [
++            "client",
++            "api"
++          ],
++          "type": "string"
++        },
++        "PaneLastInput": {
++          "properties": {
++            "client": {
++              "anyOf": [
++                {
++                  "$ref": "#/schemas/success_response/$defs/PaneLastInputClient"
++                },
++                {
++                  "type": "null"
++                }
++              ]
++            },
++            "kind": {
++              "type": "string"
++            },
++            "seq": {
++              "format": "uint64",
++              "minimum": 0,
++              "type": "integer"
++            },
++            "source": {
++              "$ref": "#/schemas/success_response/$defs/PaneInputSource"
++            }
++          },
++          "required": [
++            "seq",
++            "source",
++            "kind"
++          ],
++          "type": "object"
++        },
++        "PaneLastInputClient": {
++          "properties": {
++            "connected": {
++              "type": "boolean"
++            },
++            "ssh_connection": {
++              "type": [
++                "string",
++                "null"
++              ]
++            },
++            "via": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "connected",
++            "via"
++          ],
++          "type": "object"
++        },
+         "PaneLayoutPane": {
+           "properties": {
+             "focused": {
+@@ -9555,6 +9631,36 @@
+               ],
+               "type": "object"
+             },
++            {
++              "properties": {
++                "last_input": {
++                  "anyOf": [
++                    {
++                      "$ref": "#/schemas/success_response/$defs/PaneLastInput"
++                    },
++                    {
++                      "type": "null"
++                    }
++                  ]
++                },
++                "pane_id": {
++                  "type": "string"
++                },
++                "terminal_id": {
++                  "type": "string"
++                },
++                "type": {
++                  "const": "pane_last_input",
++                  "type": "string"
++                }
++              },
++              "required": [
++                "type",
++                "pane_id",
++                "terminal_id"
++              ],
++              "type": "object"
++            },
+             {
+               "properties": {
+                 "panes": {
+@@ -10441,6 +10547,11 @@
+             "live_handoff": {
+               "type": "boolean"
+             },
++            "pane_last_input": {
++              "default": false,
++              "description": "Supports process-local per-terminal input attribution through `pane.last_input`.",
++              "type": "boolean"
++            },
+             "ssh_agent_registration": {
+               "default": false,
+               "description": "Supports connection-scoped `server.ssh_agent.register` on the local JSON API.",
+diff --git a/docs/next/website/src/content/docs/socket-api.mdx b/docs/next/website/src/content/docs/socket-api.mdx
+index 5becbd8ea375e9eeef6c3b75f75c597b026a8560..b36a8406ce0e2977fccf2d51bf3358585bf82e67 100644
+--- a/docs/next/website/src/content/docs/socket-api.mdx
++++ b/docs/next/website/src/content/docs/socket-api.mdx
+@@ -3,6 +3,8 @@ title: Socket API
+ description: Control a running Herdr server from scripts, tools, and coding agents.
+ ---
+ 
++<!-- Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md. -->
++
+ Herdr exposes a local socket API for scripts and agents that need to inspect or control a running session.
+ 
+ Most automation should start with the CLI wrappers. Use the raw socket API only when you need direct request/response control or long-lived event subscriptions.
+@@ -103,7 +105,7 @@ Raw socket method names use dot notation:
+ | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
+ | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
+ | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
+-| Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
++| Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.last_input`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
+ | Popup | `popup.close` |
+ | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
+ | Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
+@@ -132,6 +134,36 @@ Pane control methods use public pane ids such as `w1:p1`. Methods whose
+ schema makes `pane_id` optional use the server's active focused pane when it is
+ omitted. `pane.move` always requires the source `pane_id`.
+ 
++The custom input-origin canary supports `pane.last_input` and
++`herdr pane last-input <pane_id>`. Check the optional `pane_last_input` ping
++capability before using it with other builds.
++
++```json
++{"id":"input","method":"pane.last_input","params":{"pane_id":"w1:p1"}}
++{"id":"input","result":{"type":"pane_last_input","pane_id":"w1:p1","terminal_id":"term_example","last_input":{"seq":12,"source":"client","kind":"key","client":{"connected":true,"via":"ssh_bridge","ssh_connection":"127.0.0.1 12345 100.1.2.3 22"}}}}
++```
++
++`last_input` is null until accepted input reaches that terminal during this server
++process. Keyboard presses and repeats, text commits, nonempty pastes, clipboard
++image pastes, and writable terminal-attach input update it. Mouse events, key
++releases, focus changes, and input rejected by pane visibility or popup guards
++do not. The sequence increases across terminals within one server process.
++Records follow the terminal through pane moves and disappear when the terminal
++is removed. Restart and handoff start with empty records.
++
++The SSH host bridge replaces any client-supplied origin with `via: "ssh_bridge"`
++and its own `SSH_CONNECTION`. A local client can report `via: "local"`; old clients
++without origin report `via: "unknown"`. The recorded connection's current
++liveness determines `connected`, so a disconnected client's provenance remains
++readable with `connected: false`. This metadata is local integration data and
++does not authenticate a person or device.
++
++Requests that inject input through `pane.send_text`, `pane.send_keys`,
++`pane.send_input`, `agent.start`, `agent.prompt`, or `agent.send_keys` mark the
++target as `source: "api"` with `client: null` before attempting the operation.
++An automation attempt therefore cannot inherit an earlier human's microphone.
++These records do not emit pane-update events or change pane snapshots.
++
+ `pane.send_keys` and `pane.send_input.keys` accept Herdr key-combo strings:
+ plain printable keys, special keys like `enter` and `esc`, modifier chords
+ like `ctrl+h`, `control+j`, `alt+x`, and `shift+tab`, function keys like
+diff --git a/src/api/schema.rs b/src/api/schema.rs
+index 439ed3315e612467ad033bb24f678896c9ef2cd4..95eea6d66bb688ef4997ebc02112adb488e2e110 100644
+--- a/src/api/schema.rs
++++ b/src/api/schema.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use serde::{Deserialize, Serialize};
+ 
+ pub mod agents;
+@@ -183,6 +184,8 @@ pub enum Method {
+     PaneCurrent(PaneCurrentParams),
+     #[serde(rename = "pane.get")]
+     PaneGet(PaneTarget),
++    #[serde(rename = "pane.last_input")]
++    PaneLastInput(PaneTarget),
+     #[serde(rename = "pane.focus")]
+     PaneFocus(PaneTarget),
+     #[serde(rename = "pane.input.set")]
+diff --git a/src/api/schema/panes.rs b/src/api/schema/panes.rs
+index 9dbe0221dbbb8fb92fc6506bea7ed2efeaf728ea..70353a72d445f6f9d2472ece545db6d01cbd5d71 100644
+--- a/src/api/schema/panes.rs
++++ b/src/api/schema/panes.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use std::collections::HashMap;
+ 
+ use serde::{Deserialize, Serialize};
+@@ -5,6 +6,28 @@ use serde::{Deserialize, Serialize};
+ use super::agents::AgentSessionInfo;
+ use super::common::{AgentStatus, PaneAgentState, ReadFormat, ReadSource, SplitDirection};
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
++#[serde(rename_all = "snake_case")]
++pub enum PaneInputSource {
++    Client,
++    Api,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
++pub struct PaneLastInputClient {
++    pub connected: bool,
++    pub via: String,
++    pub ssh_connection: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
++pub struct PaneLastInput {
++    pub seq: u64,
++    pub source: PaneInputSource,
++    pub kind: String,
++    pub client: Option<PaneLastInputClient>,
++}
++
+ #[derive(
+     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default,
+ )]
+diff --git a/src/api/schema/response.rs b/src/api/schema/response.rs
+index e92e49524757b5c80d59700ff3fc9d22754ff625..03eb5e95d4e1376b2b380baa70d5cacf88c8b384 100644
+--- a/src/api/schema/response.rs
++++ b/src/api/schema/response.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use serde::{Deserialize, Serialize};
+ 
+ use super::agents::AgentInfo;
+@@ -117,6 +118,11 @@ pub enum ResponseResult {
+     PaneInfo {
+         pane: PaneInfo,
+     },
++    PaneLastInput {
++        pane_id: String,
++        terminal_id: String,
++        last_input: Option<super::panes::PaneLastInput>,
++    },
+     PaneList {
+         panes: Vec<PaneInfo>,
+     },
+diff --git a/src/api/schema/server.rs b/src/api/schema/server.rs
+index 1adb62f5fcac59ebf7973be1e889627a6dad2453..f4e641d566ca5bb5b31825a9476bbdb03122cd26 100644
+--- a/src/api/schema/server.rs
++++ b/src/api/schema/server.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use serde::{Deserialize, Serialize};
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+@@ -36,4 +37,7 @@ pub struct ServerCapabilities {
+     /// Supports connection-scoped `server.ssh_agent.register` on the local JSON API.
+     #[serde(default)]
+     pub ssh_agent_registration: bool,
++    /// Supports process-local per-terminal input attribution through `pane.last_input`.
++    #[serde(default)]
++    pub pane_last_input: bool,
+ }
+diff --git a/src/api/schema/tests.rs b/src/api/schema/tests.rs
+index 3b43133b10eb3828c6be874d892ce159f4b877d5..8aa4d7362d5a6bcd1db0fcfdb1e8fca45100d716 100644
+--- a/src/api/schema/tests.rs
++++ b/src/api/schema/tests.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use std::collections::HashMap;
+ 
+ use super::*;
+@@ -31,6 +32,7 @@ fn rewrite_schema_refs(value: &mut serde_json::Value, schema_name: &str) {
+ 
+ fn protocol_schema_document() -> serde_json::Value {
+     serde_json::json!({
++        "$comment": "Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.",
+         "$schema": "https://json-schema.org/draft/2020-12/schema",
+         "title": "Herdr API",
+         "schema_version": 1,
+@@ -727,6 +729,7 @@ fn success_response_round_trips() {
+                 surface_interest: true,
+                 health_check: true,
+                 ssh_agent_registration: false,
++                pane_last_input: false,
+             }),
+         },
+     };
+diff --git a/src/api/server.rs b/src/api/server.rs
+index dbd7d3b6b165b6e94b4f7d906a6820d2eb8ba940..38c388abd9bcf7d8fc3d5f5ee3a7e4bf1fc7fc9f 100644
+--- a/src/api/server.rs
++++ b/src/api/server.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use std::io::{self, Write};
+ use std::path::{Path, PathBuf};
+ use std::sync::atomic::{AtomicBool, Ordering};
+@@ -74,6 +75,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
+         surface_interest: true,
+         health_check: true,
+         ssh_agent_registration: false,
++        pane_last_input: true,
+     })
+ }
+ 
+@@ -633,6 +635,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
+         Method::PaneList(_) => "pane.list",
+         Method::PaneCurrent(_) => "pane.current",
+         Method::PaneGet(_) => "pane.get",
++        Method::PaneLastInput(_) => "pane.last_input",
+         Method::PaneFocus(_) => "pane.focus",
+         Method::PaneInputSet(_) => "pane.input.set",
+         Method::PaneLinkActivate(_) => "pane.link.activate",
+@@ -1443,6 +1446,7 @@ mod tests {
+                 surface_interest: true,
+                 health_check: true,
+                 ssh_agent_registration: false,
++                pane_last_input: false,
+             }),
+             None,
+             None,
+diff --git a/src/app/api.rs b/src/app/api.rs
+index 20ca9d0f2f7755f3d554d79b7ba188bff37e60dd..5c119418409bca6e5faaae3cbc4a56be17a46c71 100644
+--- a/src/app/api.rs
++++ b/src/app/api.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use std::time::{Duration, Instant};
+ 
+ mod agent_view;
+@@ -1142,6 +1143,13 @@ impl App {
+             Method::PaneList(params) => return self.handle_pane_list(request.id, params),
+             Method::PaneCurrent(params) => return self.handle_pane_current(request.id, params),
+             Method::PaneGet(target) => return self.handle_pane_get(request.id, target),
++            Method::PaneLastInput(_) => {
++                return responses::encode_error(
++                    request.id,
++                    "server_unavailable",
++                    "input attribution requires the headless server",
++                );
++            }
+             Method::PaneFocus(target) => return self.handle_pane_focus(request.id, target),
+             Method::PaneInputSet(params) => return self.handle_pane_input_set(request.id, params),
+             Method::PaneLinkResolve(params) => {
+diff --git a/src/cli/pane.rs b/src/cli/pane.rs
+index 33583ee48690330df7a56f6e4b313d58ccf772e8..081cdf3153416f0bda76f01ad6e8d9cc3d23dccd 100644
+--- a/src/cli/pane.rs
++++ b/src/cli/pane.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use crate::api::schema::{
+     Method, OutputMatch, PaneCurrentParams, PaneDirection, PaneEdgesParams,
+     PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
+@@ -19,6 +20,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
+         "list" => pane_list(&args[1..]),
+         "current" => pane_current(&args[1..]),
+         "get" => pane_get(&args[1..]),
++        "last-input" => pane_last_input(&args[1..]),
+         "layout" => pane_layout(&args[1..]),
+         "process-info" => pane_process_info(&args[1..]),
+         "neighbor" => pane_neighbor(&args[1..]),
+@@ -113,6 +115,19 @@ fn pane_current(args: &[String]) -> std::io::Result<i32> {
+     })?)
+ }
+ 
++fn pane_last_input(args: &[String]) -> std::io::Result<i32> {
++    let [raw_pane_id] = args else {
++        eprintln!("usage: herdr pane last-input <pane_id>");
++        return Ok(2);
++    };
++    super::print_response(&super::send_request(&Request {
++        id: "cli:pane:last-input".into(),
++        method: Method::PaneLastInput(PaneTarget {
++            pane_id: super::normalize_pane_id(raw_pane_id),
++        }),
++    })?)
++}
++
+ fn parse_pane_current_args(
+     args: &[String],
+     env_pane_id: Option<&str>,
+@@ -1676,6 +1691,7 @@ fn print_pane_help() {
+     eprintln!("  herdr pane get <pane_id>");
+     eprintln!("  herdr pane layout [--pane ID|--current]");
+     eprintln!("  herdr pane process-info [--pane ID|--current]");
++    eprintln!("  herdr pane last-input <pane_id>");
+     eprintln!("  herdr pane neighbor --direction left|right|up|down [--pane ID|--current]");
+     eprintln!("  herdr pane edges [--pane ID|--current]");
+     eprintln!("  herdr pane focus --direction left|right|up|down [--pane ID|--current]");
+diff --git a/src/cli/status.rs b/src/cli/status.rs
+index 826c8ea6d82f0140727bc98ffe8cf5df843e348f..9dd9d079c50f6cba5d9b7e38d18b23afa4b63fc6 100644
+--- a/src/cli/status.rs
++++ b/src/cli/status.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use serde::Serialize;
+ 
+ use crate::api;
+@@ -281,6 +282,7 @@ struct ServerCapabilitiesJson {
+     surface_interest: bool,
+     health_check: bool,
+     ssh_agent_registration: bool,
++    pane_last_input: bool,
+ }
+ 
+ #[derive(Serialize)]
+@@ -327,6 +329,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
+                     surface_interest: capabilities.surface_interest,
+                     health_check: capabilities.health_check,
+                     ssh_agent_registration: capabilities.ssh_agent_registration,
++                    pane_last_input: capabilities.pane_last_input,
+                 }),
+             compatible: protocol.map(|value| value == crate::protocol::PROTOCOL_VERSION),
+             endpoint_compatible: capabilities.as_ref().and_then(|capabilities| {
+@@ -425,6 +428,7 @@ mod tests {
+                 surface_interest: true,
+                 health_check: true,
+                 ssh_agent_registration: false,
++                pane_last_input: false,
+             }),
+         }
+     }
+@@ -436,6 +440,22 @@ mod tests {
+         assert_eq!(value["capabilities"]["ssh_agent_registration"], false);
+     }
+ 
++    #[test]
++    fn input_origin_status_reports_server_capability() {
++        let mut server = running_server(Some("test"), None);
++        for supported in [false, true] {
++            if let ServerRuntimeStatus::Running {
++                capabilities: Some(capabilities),
++                ..
++            } = &mut server
++            {
++                capabilities.pane_last_input = supported;
++            }
++            let value = serde_json::to_value(server_status_json(&server)).unwrap();
++            assert_eq!(value["capabilities"]["pane_last_input"], supported);
++        }
++    }
++
+     #[test]
+     fn stale_compatible_server_does_not_require_restart() {
+         let server = running_server(
+diff --git a/src/client/handshake.rs b/src/client/handshake.rs
+index 2520286cd7ed03c0f9caf779c7a56fa921b07c9c..89dc5e627922a7e1a5badcdd6f15550c2ecaca3a 100644
+--- a/src/client/handshake.rs
++++ b/src/client/handshake.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use std::io;
+ #[cfg(unix)]
+ use std::io::IsTerminal as _;
+@@ -10,9 +11,9 @@ use tracing::info;
+ 
+ use crate::ipc::LocalStream;
+ use crate::protocol::endpoint::{
+-    EndpointClientHello, EndpointServerWelcome, BLOB_CODEC_V1, ENDPOINT_HELLO_KIND,
+-    ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1,
+-    SURFACE_CODEC_V1,
++    EndpointClientHello, EndpointClientOrigin, EndpointServerWelcome, BLOB_CODEC_V1,
++    ENDPOINT_HELLO_KIND, ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1,
++    SNAPSHOT_CODEC_V1, SURFACE_CODEC_V1,
+ };
+ use crate::protocol::{
+     self, ClientMessage, RenderEncoding, ServerMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
+@@ -184,6 +185,10 @@ pub(super) fn do_handshake(
+     let endpoint_shell = shell_surface_size.is_some();
+     let hello = if let Some(surface_size) = shell_surface_size {
+         let hello = EndpointClientHello {
++            origin: local_transport.then(|| EndpointClientOrigin {
++                via: "local".into(),
++                ssh_connection: std::env::var("SSH_CONNECTION").ok(),
++            }),
+             generation: ENDPOINT_PROTOCOL_GENERATION,
+             cell_width_px,
+             cell_height_px,
+diff --git a/src/protocol/endpoint.rs b/src/protocol/endpoint.rs
+index d1e577c454db06187013a96a5f8f615a35785a78..7709e36419e81eac5d7442f7fde7129e61d6be6b 100644
+--- a/src/protocol/endpoint.rs
++++ b/src/protocol/endpoint.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ //! Stable endpoint compatibility contract for client-owned shells.
+ //!
+ //! The endpoint generation is intentionally independent from the private
+@@ -43,6 +44,13 @@ fn default_true() -> bool {
+     true
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct EndpointClientOrigin {
++    pub via: String,
++    #[serde(default)]
++    pub ssh_connection: Option<String>,
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ pub struct EndpointClientHello {
+     pub generation: u32,
+@@ -72,6 +80,9 @@ pub struct EndpointClientHello {
+     pub input_codecs: Vec<String>,
+     #[serde(default)]
+     pub blob_codecs: Vec<String>,
++    /// Connection provenance for local integrations, not an authentication claim.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub origin: Option<EndpointClientOrigin>,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+@@ -219,6 +230,7 @@ mod tests {
+             surface_codecs: vec![SURFACE_CODEC_V1.into()],
+             input_codecs: vec![INPUT_CODEC_V1.into()],
+             blob_codecs: vec![BLOB_CODEC_V1.into()],
++            origin: None,
+         }
+     }
+ 
+@@ -266,6 +278,7 @@ mod tests {
+         )))
+         .unwrap();
+         assert!(hello.supports_required_codecs());
++        assert_eq!(hello.origin, None);
+ 
+         let welcome: EndpointServerWelcome = serde_json::from_str(include_str!(concat!(
+             env!("CARGO_MANIFEST_DIR"),
+diff --git a/src/remote/host.rs b/src/remote/host.rs
+index 825ae10c1e07dc9555cae7bc8e70188cedf2c7aa..52ac5126ef935aabb4b92eead2b29e755c5e5928 100644
+--- a/src/remote/host.rs
++++ b/src/remote/host.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ //! Remote-host side of the SSH stdio bridge.
+ 
+ use std::io;
+@@ -19,12 +20,20 @@ pub(crate) fn run_remote_client_bridge(args: &[String]) -> io::Result<()> {
+             ))
+         }
+     };
++    // Saved-connection preparation calls the bridge with empty stdin solely to
++    // start the daemon, so startup must precede the optional attachment frame.
+     ensure_remote_server_running()?;
++    // Stdin handles share one process-wide buffer. The byte pump below obtains
++    // another handle to that same buffer, preserving any bytes read ahead here.
++    let Some(hello) = read_bridge_hello(&mut io::stdin(), std::env::var("SSH_CONNECTION").ok())?
++    else {
++        return Ok(());
++    };
+     #[cfg(unix)]
+     let _ssh_agent = super::ssh_agent::Registration::start();
+ 
+     let socket_path = crate::server::socket_paths::client_socket_path();
+-    let stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
++    let mut stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
+         io::Error::new(
+             err.kind(),
+             format!(
+@@ -34,9 +43,56 @@ pub(crate) fn run_remote_client_bridge(args: &[String]) -> io::Result<()> {
+         )
+     })?;
+ 
++    crate::protocol::write_message(&mut stream, &hello).map_err(io::Error::other)?;
+     crate::platform::forward_remote_bridge_stdio(stream, idle_timeout)
+ }
+ 
++fn read_bridge_hello(
++    reader: &mut impl io::Read,
++    ssh_connection: Option<String>,
++) -> io::Result<Option<crate::protocol::ClientMessage>> {
++    use crate::protocol::endpoint::{EndpointClientOrigin, ENDPOINT_HELLO_KIND};
++    use crate::protocol::{read_message, ClientMessage, MAX_FRAME_SIZE};
++
++    let mut first_byte = [0];
++    loop {
++        match reader.read(&mut first_byte) {
++            Ok(0) => return Ok(None),
++            Ok(_) => break,
++            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
++            Err(error) => return Err(error),
++        }
++    }
++    // Only EOF before the first byte is preparation. Partial frame prefixes or
++    // payloads still go through the strict framing decoder and remain errors.
++    let mut reader = io::Read::chain(io::Cursor::new(first_byte), reader);
++    let mut message: ClientMessage =
++        read_message(&mut reader, MAX_FRAME_SIZE).map_err(io::Error::other)?;
++    if let ClientMessage::EndpointControl { kind, data } = &mut message {
++        if kind == ENDPOINT_HELLO_KIND {
++            // Preserve unknown optional fields so a newer client can use this bridge.
++            let mut hello: serde_json::Value =
++                serde_json::from_str(data).map_err(io::Error::other)?;
++            let object = hello.as_object_mut().ok_or_else(|| {
++                io::Error::new(
++                    io::ErrorKind::InvalidData,
++                    "endpoint hello must be an object",
++                )
++            })?;
++            object.insert(
++                "origin".into(),
++                serde_json::to_value(EndpointClientOrigin {
++                    via: "ssh_bridge".into(),
++                    ssh_connection,
++                })
++                .map_err(io::Error::other)?,
++            );
++            *data = serde_json::to_string(&hello).map_err(io::Error::other)?;
++        }
++    }
++    Ok(Some(message))
++}
++
+ fn ensure_remote_server_running() -> io::Result<()> {
+     let socket_path = crate::server::socket_paths::client_socket_path();
+     if crate::server::autodetect::is_server_listening() {
+@@ -61,3 +117,159 @@ fn ensure_remote_server_running() -> io::Result<()> {
+     crate::server::autodetect::spawn_server_daemon()?;
+     crate::server::autodetect::wait_for_server_socket(&socket_path, Duration::from_secs(5))
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::protocol::{self, ClientMessage};
++
++    #[test]
++    fn input_origin_stdin_child() {
++        if std::env::var_os("HERDR_INPUT_ORIGIN_STDIN_TEST").is_none() {
++            return;
++        }
++        // Fill the process-wide buffer, then release its lock before the
++        // handshake and upload worker obtain their own Stdin handles.
++        assert!(!std::io::BufRead::fill_buf(&mut io::stdin().lock())
++            .unwrap()
++            .is_empty());
++        let first = read_bridge_hello(&mut io::stdin(), None).unwrap().unwrap();
++        assert!(matches!(first, ClientMessage::TerminalHello { .. }));
++        let next = std::thread::spawn(|| {
++            protocol::read_message::<_, ClientMessage>(&mut io::stdin(), protocol::MAX_FRAME_SIZE)
++                .unwrap()
++        })
++        .join()
++        .unwrap();
++        assert_eq!(
++            next,
++            ClientMessage::Input {
++                data: b"buffered input".to_vec()
++            }
++        );
++    }
++
++    #[test]
++    fn input_origin_stdin_handles_share_buffer_with_upload_worker() {
++        use std::io::Write;
++        use std::process::{Command, Stdio};
++
++        let mut child = Command::new(std::env::current_exe().unwrap())
++            .args([
++                "--exact",
++                "remote::host::tests::input_origin_stdin_child",
++                "--nocapture",
++            ])
++            .env("HERDR_INPUT_ORIGIN_STDIN_TEST", "1")
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::piped())
++            .spawn()
++            .unwrap();
++        let mut frames = Vec::new();
++        protocol::write_message(
++            &mut frames,
++            &ClientMessage::TerminalHello {
++                version: protocol::PROTOCOL_VERSION,
++                cols: 80,
++                rows: 24,
++                cell_width_px: 0,
++                cell_height_px: 0,
++                pixel_mouse: false,
++            },
++        )
++        .unwrap();
++        protocol::write_message(
++            &mut frames,
++            &ClientMessage::Input {
++                data: b"buffered input".to_vec(),
++            },
++        )
++        .unwrap();
++        child.stdin.take().unwrap().write_all(&frames).unwrap();
++        let output = child.wait_with_output().unwrap();
++        assert!(
++            output.status.success(),
++            "{}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
++    }
++
++    #[test]
++    fn input_origin_bridge_overwrites_claim_and_preserves_buffered_frames() {
++        let mut hello: serde_json::Value = serde_json::from_str(include_str!(concat!(
++            env!("CARGO_MANIFEST_DIR"),
++            "/tests/fixtures/endpoint-hello-v1.json"
++        )))
++        .unwrap();
++        hello["origin"] = serde_json::json!({"via": "spoofed", "ssh_connection": "spoofed"});
++        hello["future_optional_field"] = serde_json::json!(42);
++        let mut frames = Vec::new();
++        protocol::write_message(
++            &mut frames,
++            &ClientMessage::EndpointControl {
++                kind: protocol::endpoint::ENDPOINT_HELLO_KIND.into(),
++                data: hello.to_string(),
++            },
++        )
++        .unwrap();
++        protocol::write_message(
++            &mut frames,
++            &ClientMessage::Input {
++                data: b"next".to_vec(),
++            },
++        )
++        .unwrap();
++        let mut reader = io::BufReader::new(io::Cursor::new(frames));
++        let ClientMessage::EndpointControl { data, .. } =
++            read_bridge_hello(&mut reader, Some("127.0.0.1 1234 100.1.2.3 22".into()))
++                .unwrap()
++                .unwrap()
++        else {
++            panic!("expected endpoint hello");
++        };
++        let hello: serde_json::Value = serde_json::from_str(&data).unwrap();
++        assert_eq!(
++            hello["origin"],
++            serde_json::json!({"via": "ssh_bridge", "ssh_connection": "127.0.0.1 1234 100.1.2.3 22"})
++        );
++        assert_eq!(hello["future_optional_field"], 42);
++        let next: ClientMessage =
++            protocol::read_message(&mut reader, protocol::MAX_FRAME_SIZE).unwrap();
++        assert_eq!(
++            next,
++            ClientMessage::Input {
++                data: b"next".to_vec()
++            }
++        );
++    }
++
++    #[test]
++    fn input_origin_bridge_preserves_legacy_hello_bytes() {
++        let hello = ClientMessage::TerminalHello {
++            version: protocol::PROTOCOL_VERSION,
++            cols: 80,
++            rows: 24,
++            cell_width_px: 0,
++            cell_height_px: 0,
++            pixel_mouse: false,
++        };
++        let mut original = Vec::new();
++        protocol::write_message(&mut original, &hello).unwrap();
++        let decoded = read_bridge_hello(&mut io::Cursor::new(&original), None)
++            .unwrap()
++            .unwrap();
++        let mut forwarded = Vec::new();
++        protocol::write_message(&mut forwarded, &decoded).unwrap();
++        assert_eq!(forwarded, original);
++    }
++
++    #[test]
++    fn input_origin_bridge_accepts_preparation_eof_but_rejects_truncated_frames() {
++        assert_eq!(read_bridge_hello(&mut io::empty(), None).unwrap(), None);
++        for truncated in [&b"\x01"[..], &b"\x01\x00\x00"[..], &b"\x01\x00\x00\x00"[..]] {
++            assert!(read_bridge_hello(&mut io::Cursor::new(truncated), None).is_err());
++        }
++    }
++}
+diff --git a/src/server/client_transport.rs b/src/server/client_transport.rs
+index 88daf25085c2d94f51bdff0479d2121023af7900..aaab8ab3c088ee24626fe20deebef8e242725344 100644
+--- a/src/server/client_transport.rs
++++ b/src/server/client_transport.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ //! Blocking client socket transport for the headless server.
+ //!
+ //! This module owns the thin-client handshake, read loop, and writer loop.
+@@ -407,6 +408,7 @@ pub(crate) enum ServerEvent {
+     /// A client-owned shell completed its dedicated handshake.
+     ClientShellConnected {
+         client_id: u64,
++        origin: Option<crate::protocol::endpoint::EndpointClientOrigin>,
+         surface_cols: u16,
+         surface_rows: u16,
+         cell_width_px: u32,
+@@ -787,6 +789,7 @@ pub(crate) fn handle_client_handshake(
+                     hello.surface_reuse,
+                     hello.surface_delta,
+                     hello.surface_scroll,
++                    hello.origin,
+                 )),
+             )
+         }
+@@ -884,10 +887,12 @@ pub(crate) fn handle_client_handshake(
+         surface_reuse,
+         surface_delta,
+         surface_scroll,
++        origin,
+     )) = shell_options
+     {
+         ServerEvent::ClientShellConnected {
+             client_id,
++            origin,
+             surface_cols: client_cols,
+             surface_rows: client_rows,
+             cell_width_px,
+@@ -1462,6 +1467,7 @@ mod tests {
+ 
+     fn endpoint_hello(surface_cols: u16, surface_rows: u16) -> ClientMessage {
+         let hello = EndpointClientHello {
++            origin: None,
+             generation: ENDPOINT_PROTOCOL_GENERATION,
+             cell_width_px: 8,
+             cell_height_px: 16,
+@@ -1969,8 +1975,17 @@ mod tests {
+             handle_client_handshake(server_stream, 43, &server_event_tx, &handshake_quit)
+         });
+ 
+-        protocol::write_message(&mut client_stream, &endpoint_hello(80, 29))
+-            .expect("write shell hello");
++        let mut hello = endpoint_hello(80, 29);
++        let expected_origin = crate::protocol::endpoint::EndpointClientOrigin {
++            via: "ssh_bridge".into(),
++            ssh_connection: Some("127.0.0.1 1234 100.1.2.3 22".into()),
++        };
++        if let ClientMessage::EndpointControl { data, .. } = &mut hello {
++            let mut parsed: EndpointClientHello = serde_json::from_str(data).unwrap();
++            parsed.origin = Some(expected_origin.clone());
++            *data = serde_json::to_string(&parsed).unwrap();
++        }
++        protocol::write_message(&mut client_stream, &hello).expect("write shell hello");
+ 
+         let welcome: ServerMessage =
+             protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome");
+@@ -1983,6 +1998,7 @@ mod tests {
+         {
+             ServerEvent::ClientShellConnected {
+                 client_id,
++                origin,
+                 surface_cols,
+                 surface_rows,
+                 cell_width_px,
+@@ -1997,6 +2013,7 @@ mod tests {
+                 surface_scroll,
+                 writer,
+             } => {
++                assert_eq!(origin, Some(expected_origin));
+                 assert!(!surface_reuse);
+                 assert!(!surface_delta);
+                 assert!(!surface_scroll);
+diff --git a/src/server/clients.rs b/src/server/clients.rs
+index 65e875b82605a72b6654037d241ec275cc271f36..ce0742a06d28481f317f911c8075f55af8dad6b4 100644
+--- a/src/server/clients.rs
++++ b/src/server/clients.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use std::collections::HashMap;
+ use std::path::PathBuf;
+ 
+@@ -131,6 +132,8 @@ impl ClientShellLocation {
+ 
+ /// A connected client tracked by the server.
+ pub(crate) struct ClientConnection {
++    /// Optional connection provenance. Shared by input records without per-key string copies.
++    pub(crate) origin: Option<std::sync::Arc<crate::protocol::endpoint::EndpointClientOrigin>>,
+     /// Whether this connection owns the Herdr shell or one direct terminal stream.
+     pub(crate) mode: ClientConnectionMode,
+     /// The client's terminal size after clamping.
+@@ -225,6 +228,7 @@ impl ClientConnection {
+     ) -> Self {
+         Self {
+             mode,
++            origin: None,
+             terminal_size,
+             cell_size,
+             last_activity,
+diff --git a/src/server/headless.rs b/src/server/headless.rs
+index 18869e095be9761aea2e48021b7fe77e813ca4bc..64a5042a270cd8c849522aa5b7b84988f3fe1560 100644
+--- a/src/server/headless.rs
++++ b/src/server/headless.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ //! Headless server mode — runs the herdr event loop without a real terminal.
+ //!
+ //! The server:
+@@ -75,6 +76,7 @@ use crate::server::terminal_attach::paste_payload_for_runtime;
+ mod bootstrap;
+ mod client_views;
+ mod endpoint_requests;
++mod input_origin;
+ mod lifecycle;
+ mod native_graphics;
+ mod notifications;
+@@ -195,6 +197,8 @@ pub struct HeadlessServer {
+     client_socket_path: PathBuf,
+     client_socket_identity: SocketFileIdentity,
+     clients: HashMap<u64, ClientConnection>,
++    /// Ephemeral input attribution, deliberately excluded from snapshots and handoff.
++    terminal_last_input: input_origin::InputOrigins,
+     native_graphics: native_graphics::NativeGraphics,
+     #[cfg(unix)]
+     next_client_id: u64,
+@@ -341,6 +345,7 @@ impl HeadlessServer {
+             client_socket_path: client_path,
+             client_socket_identity,
+             clients: HashMap::new(),
++            terminal_last_input: Default::default(),
+             native_graphics: Default::default(),
+             #[cfg(unix)]
+             next_client_id: 1,
+@@ -1136,6 +1141,12 @@ impl HeadlessServer {
+                     let payload = paste_payload_for_runtime(runtime, &path);
+                     if let Err(err) = runtime.try_send_bytes(Bytes::from(payload)) {
+                         warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach clipboard image paste failed");
++                    } else {
++                        self.terminal_last_input.record(
++                            terminal_id,
++                            "clipboard_image",
++                            Some((client_id, self.clients[&client_id].origin.clone())),
++                        );
+                     }
+                 }
+                 true
+@@ -1174,6 +1185,14 @@ impl HeadlessServer {
+                     &[protocol::ClientPaneInputEvent::Paste(path)],
+                 ) {
+                     warn!(client_id, pane_id, err = %err, "client shell clipboard image paste failed");
++                } else if let Some(terminal_id) =
++                    self.app.state.workspaces[workspace_index].terminal_id(runtime_pane_id)
++                {
++                    self.terminal_last_input.record(
++                        terminal_id.as_str(),
++                        "clipboard_image",
++                        Some((client_id, self.clients[&client_id].origin.clone())),
++                    );
+                 }
+                 true
+             }
+@@ -1850,6 +1869,7 @@ impl HeadlessServer {
+             }
+             ServerEvent::ClientShellConnected {
+                 client_id,
++                origin,
+                 surface_cols,
+                 surface_rows,
+                 cell_width_px,
+@@ -1903,6 +1923,7 @@ impl HeadlessServer {
+                     Some(writer),
+                 );
+                 connection.pixel_mouse = pixel_mouse && observed.is_known();
++                connection.origin = origin.map(Arc::new);
+                 connection.direct_graphics = direct_graphics;
+                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
+                 connection.shell_mouse_capture = mouse_capture;
+@@ -2050,8 +2071,15 @@ impl HeadlessServer {
+                     return false;
+                 };
+                 if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
++                    let has_input = !data.is_empty();
+                     if let Err(err) = apply_terminal_attach_input(runtime, data) {
+                         warn!(client_id, terminal_id = %terminal_id, err = %err);
++                    } else if has_input {
++                        self.terminal_last_input.record(
++                            terminal_id,
++                            "raw_input",
++                            Some((client_id, self.clients[&client_id].origin.clone())),
++                        );
+                     }
+                 }
+                 true
+@@ -2390,6 +2418,19 @@ impl HeadlessServer {
+                 ) else {
+                     return foreground_changed | geometry_changed;
+                 };
++                // Attribute after ownership/visibility guards and before the
++                // batch can partially write then fail on a later event.
++                if let Some(kind) = input_origin::input_kind(&events) {
++                    if let Some(terminal_id) =
++                        self.app.state.workspaces[workspace_index].terminal_id(runtime_pane_id)
++                    {
++                        self.terminal_last_input.record(
++                            terminal_id.as_str(),
++                            kind,
++                            Some((client_id, self.clients[&client_id].origin.clone())),
++                        );
++                    }
++                }
+                 let scroll_before = runtime.scroll_metrics();
+                 if let Err(err) = apply_client_pane_input_events(runtime, &events) {
+                     warn!(client_id, pane_id, err = %err, "targeted client shell input failed");
+@@ -2887,6 +2928,12 @@ impl HeadlessServer {
+         }
+ 
+         match &msg.request.method {
++            api::schema::Method::PaneLastInput(params) => {
++                let response =
++                    self.handle_pane_last_input_api(msg.request.id.clone(), &params.pane_id);
++                let _ = msg.respond_to.send(response);
++                return false;
++            }
+             api::schema::Method::ClientWindowTitleSet(params) => {
+                 let response = self.handle_client_window_title_api(
+                     msg.request.id.clone(),
+@@ -2957,6 +3004,8 @@ impl HeadlessServer {
+             return changed;
+         }
+         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request);
++        // An automation attempt must never borrow a previous human microphone.
++        self.record_api_input(&msg.request.method);
+         if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
+             let deferred_changed = self
+                 .app
+diff --git a/src/server/headless/client_views.rs b/src/server/headless/client_views.rs
+index 31b39be2e2f0efa53d77521527a44203b8feb4d9..b3fb69f25b66e4dc0f4c7e616b37d90fd43fec6d 100644
+--- a/src/server/headless/client_views.rs
++++ b/src/server/headless/client_views.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use super::*;
+ use crate::server::client_shell::resize_popup_runtime;
+ use crate::server::clients::ClientShellTopology;
+@@ -126,6 +127,7 @@ impl HeadlessServer {
+     }
+ 
+     pub(super) fn reconcile_client_shell_locations(&mut self) {
++        self.prune_input_origins();
+         if self.app.state.popup_pane.is_none() {
+             self.popup_owner_tab_id = None;
+         } else if self
+diff --git a/src/server/headless/input_origin.rs b/src/server/headless/input_origin.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..dcbcd2213394b41828b4145b1112fb479f0065f5
+--- /dev/null
++++ b/src/server/headless/input_origin.rs
+@@ -0,0 +1,164 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
++use super::*;
++use crate::api::schema::{
++    Method, PaneInputSource, PaneLastInput, PaneLastInputClient, ResponseResult,
++};
++use crate::protocol::endpoint::EndpointClientOrigin;
++use crate::protocol::{ClientKeyKind, ClientPaneInputEvent};
++
++#[derive(Default)]
++pub(super) struct InputOrigins {
++    sequence: u64,
++    terminals: HashMap<String, LastInput>,
++}
++
++struct LastInput {
++    seq: u64,
++    kind: &'static str,
++    client: Option<(u64, Option<Arc<EndpointClientOrigin>>)>,
++}
++
++impl InputOrigins {
++    #[cfg(test)]
++    pub(super) fn is_empty(&self) -> bool {
++        self.terminals.is_empty()
++    }
++
++    pub(super) fn record(
++        &mut self,
++        terminal_id: &str,
++        kind: &'static str,
++        client: Option<(u64, Option<Arc<EndpointClientOrigin>>)>,
++    ) {
++        self.sequence = self.sequence.saturating_add(1);
++        let input = LastInput {
++            seq: self.sequence,
++            kind,
++            client,
++        };
++        if let Some(previous) = self.terminals.get_mut(terminal_id) {
++            *previous = input;
++        } else {
++            self.terminals.insert(terminal_id.to_owned(), input);
++        }
++    }
++
++    fn get(
++        &self,
++        terminal_id: &str,
++        clients: &HashMap<u64, ClientConnection>,
++    ) -> Option<PaneLastInput> {
++        let input = self.terminals.get(terminal_id)?;
++        Some(PaneLastInput {
++            seq: input.seq,
++            kind: input.kind.into(),
++            source: if input.client.is_some() {
++                PaneInputSource::Client
++            } else {
++                PaneInputSource::Api
++            },
++            client: input
++                .client
++                .as_ref()
++                .map(|(client_id, origin)| PaneLastInputClient {
++                    connected: clients.contains_key(client_id),
++                    via: origin
++                        .as_ref()
++                        .map_or("unknown", |origin| origin.via.as_str())
++                        .into(),
++                    ssh_connection: origin
++                        .as_ref()
++                        .and_then(|origin| origin.ssh_connection.clone()),
++                }),
++        })
++    }
++}
++
++/// One lookup/update per accepted batch, with no scans or per-keystroke string copies.
++pub(super) fn input_kind(events: &[ClientPaneInputEvent]) -> Option<&'static str> {
++    events.iter().rev().find_map(|event| match event {
++        ClientPaneInputEvent::Key {
++            kind: ClientKeyKind::Press | ClientKeyKind::Repeat,
++            ..
++        } => Some("key"),
++        ClientPaneInputEvent::TextCommit(text) if !text.is_empty() => Some("text_commit"),
++        ClientPaneInputEvent::Paste(text) if !text.is_empty() => Some("paste"),
++        _ => None,
++    })
++}
++
++impl HeadlessServer {
++    pub(super) fn prune_input_origins(&mut self) {
++        self.terminal_last_input
++            .terminals
++            .retain(|terminal_id, _| self.app.state.terminals.contains_key(terminal_id.as_str()));
++    }
++
++    pub(super) fn handle_pane_last_input_api(&mut self, id: String, pane_id: &str) -> String {
++        self.prune_input_origins();
++        let terminal_id = self
++            .app
++            .parse_pane_id(pane_id)
++            .and_then(|(workspace_index, pane_id)| {
++                self.app
++                    .state
++                    .workspaces
++                    .get(workspace_index)?
++                    .terminal_id(pane_id)
++            });
++        let Some(terminal_id) = terminal_id else {
++            return crate::server::client_commands::error_response(
++                id,
++                "pane_not_found",
++                format!("pane {pane_id} not found"),
++            );
++        };
++        serde_json::to_string(&api::schema::SuccessResponse {
++            id,
++            result: ResponseResult::PaneLastInput {
++                pane_id: pane_id.to_owned(),
++                terminal_id: terminal_id.to_string(),
++                last_input: self
++                    .terminal_last_input
++                    .get(terminal_id.as_str(), &self.clients),
++            },
++        })
++        .expect("input attribution contains only JSON-safe values")
++    }
++
++    pub(super) fn record_api_input(&mut self, method: &Method) {
++        let (target, kind) = match method {
++            Method::PaneSendText(params) => (self.app.parse_pane_id(&params.pane_id), "send_text"),
++            Method::PaneSendKeys(params) => (self.app.parse_pane_id(&params.pane_id), "send_keys"),
++            Method::PaneSendInput(params) => {
++                (self.app.parse_pane_id(&params.pane_id), "send_input")
++            }
++            Method::AgentStart(params) => (self.app.parse_pane_id(&params.pane_id), "agent_start"),
++            Method::AgentPrompt(params) => (
++                self.app
++                    .resolve_agent_target(&params.target)
++                    .ok()
++                    .map(|resolved| (resolved.ws_idx, resolved.pane_id)),
++                "agent_prompt",
++            ),
++            Method::AgentSendKeys(params) => (
++                self.app
++                    .resolve_agent_target(&params.target)
++                    .ok()
++                    .map(|resolved| (resolved.ws_idx, resolved.pane_id)),
++                "agent_send_keys",
++            ),
++            _ => return,
++        };
++        if let Some(terminal_id) = target.and_then(|(workspace_index, pane_id)| {
++            self.app
++                .state
++                .workspaces
++                .get(workspace_index)?
++                .terminal_id(pane_id)
++        }) {
++            self.terminal_last_input
++                .record(terminal_id.as_str(), kind, None);
++        }
++    }
++}
+diff --git a/src/server/headless/tests/input_origin.rs b/src/server/headless/tests/input_origin.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..58a7f69780eb75c2487397c74dd5d14fa56fcb5f
+--- /dev/null
++++ b/src/server/headless/tests/input_origin.rs
+@@ -0,0 +1,305 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
++use super::*;
++use crate::api::schema::{
++    Method, PaneLastInput, PaneTarget, Request, ResponseResult, SuccessResponse,
++};
++use crate::protocol::{ClientKeyCode, ClientKeyKind, ClientPaneInputEvent};
++
++fn setup() -> (
++    HeadlessServer,
++    Vec<String>,
++    Vec<tokio::sync::mpsc::Receiver<Bytes>>,
++) {
++    let mut server = test_headless_server();
++    let mut workspace = crate::workspace::Workspace::test_new("input-origin");
++    let first = workspace.tabs[0].root_pane;
++    let second = workspace.test_split(ratatui::layout::Direction::Horizontal);
++    server.app.state.workspaces = vec![workspace];
++    server.app.state.ensure_test_terminals();
++    server.app.state.active = Some(0);
++    server.app.state.selected = 0;
++    server.app.state.mode = crate::app::Mode::Terminal;
++    let mut receivers = Vec::new();
++    let mut panes = Vec::new();
++    for pane in [first, second] {
++        let terminal = server.app.state.workspaces[0]
++            .terminal_id(pane)
++            .unwrap()
++            .clone();
++        let (runtime, receiver) =
++            crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 32);
++        server.app.terminal_runtimes.insert(terminal, runtime);
++        receivers.push(receiver);
++        panes.push(server.app.public_pane_id(0, pane).unwrap());
++    }
++    for (id, connection) in [
++        (1, "127.0.0.1 1111 100.1.2.3 22"),
++        (2, "127.0.0.1 2222 100.1.2.3 22"),
++    ] {
++        let mut client = ClientConnection::new(
++            (80, 24),
++            Default::default(),
++            id,
++            RenderEncoding::SemanticFrame,
++            None,
++        );
++        client.origin = Some(Arc::new(protocol::endpoint::EndpointClientOrigin {
++            via: "ssh_bridge".into(),
++            ssh_connection: Some(connection.into()),
++        }));
++        server.clients.insert(id, client);
++    }
++    (server, panes, receivers)
++}
++
++fn input(server: &mut HeadlessServer, client_id: u64, pane_id: &str, event: ClientPaneInputEvent) {
++    server.handle_server_event(ServerEvent::ClientShellPaneInput {
++        client_id,
++        pane_id: pane_id.into(),
++        events: vec![event],
++    });
++}
++
++fn request(server: &mut HeadlessServer, method: Method) -> serde_json::Value {
++    let (respond_to, response) = std::sync::mpsc::channel();
++    server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
++        request: Request {
++            id: "input-origin-test".into(),
++            method,
++        },
++        respond_to,
++        response_write_complete: None,
++    });
++    serde_json::from_str(&response.recv().unwrap()).unwrap()
++}
++
++fn last_input(server: &mut HeadlessServer, pane: &str) -> Option<PaneLastInput> {
++    let response = request(
++        server,
++        Method::PaneLastInput(PaneTarget {
++            pane_id: pane.into(),
++        }),
++    );
++    let response: SuccessResponse = serde_json::from_value(response).unwrap();
++    let ResponseResult::PaneLastInput {
++        pane_id,
++        terminal_id,
++        last_input,
++    } = response.result
++    else {
++        panic!("expected pane last input");
++    };
++    assert_eq!(pane_id, pane);
++    assert!(terminal_id.starts_with("term_"));
++    last_input
++}
++
++fn key(kind: ClientKeyKind) -> ClientPaneInputEvent {
++    client_page_key(
++        ClientKeyCode::Char('x'),
++        crossterm::event::KeyModifiers::empty(),
++        kind,
++    )
++}
++
++#[tokio::test]
++async fn input_origin_connected_event_preserves_its_origin() {
++    let (mut server, panes, _receivers) = setup();
++    let origin = protocol::endpoint::EndpointClientOrigin {
++        via: "ssh_bridge".into(),
++        ssh_connection: Some("127.0.0.1 3333 100.1.2.3 22".into()),
++    };
++    let (writer, _control, _render) = test_client_writer();
++    server.handle_server_event(ServerEvent::ClientShellConnected {
++        client_id: 3,
++        origin: Some(origin.clone()),
++        surface_cols: 80,
++        surface_rows: 24,
++        cell_width_px: 8,
++        cell_height_px: 16,
++        pixel_mouse: false,
++        direct_graphics: false,
++        endpoint_keybindings: false,
++        mouse_capture: false,
++        surface_active: true,
++        surface_reuse: false,
++        surface_delta: false,
++        surface_scroll: false,
++        writer,
++    });
++    input(&mut server, 3, &panes[0], key(ClientKeyKind::Press));
++    assert_eq!(
++        last_input(&mut server, &panes[0])
++            .unwrap()
++            .client
++            .unwrap()
++            .ssh_connection,
++        origin.ssh_connection
++    );
++    shutdown_test_runtimes(&mut server);
++}
++
++#[tokio::test]
++async fn input_origin_two_clients_and_panes_follow_actual_keyboard_input() {
++    let (mut server, panes, _receivers) = setup();
++    assert!(last_input(&mut server, &panes[0]).is_none());
++    input(&mut server, 1, &panes[0], key(ClientKeyKind::Press));
++    let first = last_input(&mut server, &panes[0]).unwrap();
++    input(
++        &mut server,
++        2,
++        &panes[1],
++        ClientPaneInputEvent::Paste("paste".into()),
++    );
++    let second = last_input(&mut server, &panes[1]).unwrap();
++    assert!(second.seq > first.seq);
++    assert_ne!(first.client, second.client);
++    assert_eq!(last_input(&mut server, &panes[0]), Some(first.clone()));
++
++    input(&mut server, 2, &panes[0], key(ClientKeyKind::Release));
++    input(
++        &mut server,
++        2,
++        &panes[0],
++        ClientPaneInputEvent::Mouse {
++            kind: protocol::ClientMouseKind::Moved,
++            position: protocol::ClientMousePosition::Cell { column: 1, row: 1 },
++            geometry: None,
++            modifiers: 0,
++            lines: 0,
++        },
++    );
++    server.promote_client_to_foreground(2);
++    assert_eq!(last_input(&mut server, &panes[0]), Some(first));
++    input(&mut server, 2, &panes[0], key(ClientKeyKind::Repeat));
++    let repeated = last_input(&mut server, &panes[0]).unwrap();
++    assert_eq!(repeated.client, second.client);
++    assert!(repeated.seq > second.seq);
++    input(
++        &mut server,
++        1,
++        &panes[0],
++        ClientPaneInputEvent::TextCommit("ime".into()),
++    );
++    assert_eq!(
++        last_input(&mut server, &panes[0]).unwrap().kind,
++        "text_commit"
++    );
++    shutdown_test_runtimes(&mut server);
++}
++
++#[tokio::test]
++async fn input_origin_api_attempts_invalidate_human_origin() {
++    let (mut server, panes, _receivers) = setup();
++    for method in [
++        Method::PaneSendText(api::schema::PaneSendTextParams {
++            pane_id: panes[0].clone(),
++            text: "automated".into(),
++        }),
++        Method::PaneSendKeys(api::schema::PaneSendKeysParams {
++            pane_id: panes[0].clone(),
++            keys: vec!["Enter".into()],
++        }),
++        Method::PaneSendInput(api::schema::PaneSendInputParams {
++            pane_id: panes[0].clone(),
++            text: "automated".into(),
++            keys: vec![],
++        }),
++    ] {
++        input(&mut server, 1, &panes[0], key(ClientKeyKind::Press));
++        assert!(last_input(&mut server, &panes[0]).unwrap().client.is_some());
++        let response = request(&mut server, method);
++        assert!(response.get("error").is_none(), "{response}");
++        let input = last_input(&mut server, &panes[0]).unwrap();
++        assert_eq!(input.source, api::schema::PaneInputSource::Api);
++        assert_eq!(input.client, None);
++    }
++    shutdown_test_runtimes(&mut server);
++}
++
++#[tokio::test]
++async fn input_origin_disconnect_and_terminal_removal_do_not_reuse_origin() {
++    let (mut server, panes, _receivers) = setup();
++    input(&mut server, 1, &panes[0], key(ClientKeyKind::Press));
++    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 1 });
++    let origin = last_input(&mut server, &panes[0]).unwrap().client.unwrap();
++    assert!(!origin.connected);
++    assert_eq!(
++        origin.ssh_connection.as_deref(),
++        Some("127.0.0.1 1111 100.1.2.3 22")
++    );
++    let response = request(
++        &mut server,
++        Method::PaneClose(PaneTarget {
++            pane_id: panes[0].clone(),
++        }),
++    );
++    assert!(response.get("error").is_none(), "{response}");
++    assert!(server.terminal_last_input.is_empty());
++    assert!(last_input(&mut server, &panes[1]).is_none());
++    shutdown_test_runtimes(&mut server);
++}
++
++#[tokio::test]
++async fn input_origin_rejected_surface_and_popup_input_preserve_origin() {
++    let (mut server, panes, _receivers) = setup();
++    input(&mut server, 1, &panes[0], key(ClientKeyKind::Press));
++    let first = last_input(&mut server, &panes[0]);
++    server.clients.get_mut(&2).unwrap().shell_surface_active = false;
++    input(&mut server, 2, &panes[0], key(ClientKeyKind::Press));
++    server.clients.get_mut(&2).unwrap().shell_surface_active = true;
++    let hidden_tab = server.app.state.workspaces[0].test_add_tab(Some("hidden"));
++    server.app.state.ensure_test_terminals();
++    server.clients.get_mut(&2).unwrap().shell_location = Some(Default::default());
++    let hidden_tab_id = server.app.public_tab_id(0, hidden_tab).unwrap();
++    assert!(server.focus_shell_client_on_tab(2, &hidden_tab_id));
++    input(&mut server, 2, &panes[0], key(ClientKeyKind::Press));
++    let original_tab_id = server.app.public_tab_id(0, 0).unwrap();
++    assert!(server.focus_shell_client_on_tab(2, &original_tab_id));
++    let (workspace, pane) = server.app.parse_pane_id(&panes[0]).unwrap();
++    server.app.state.popup_pane = Some(crate::app::state::PopupPaneState {
++        pane_id: pane,
++        terminal_id: server.app.state.workspaces[workspace]
++            .terminal_id(pane)
++            .unwrap()
++            .clone(),
++        width: None,
++        height: None,
++    });
++    server.popup_owner_tab_id = server.shell_tab_id_for_client(2);
++    input(&mut server, 2, &panes[0], key(ClientKeyKind::Press));
++    assert_eq!(last_input(&mut server, &panes[0]), first);
++    server.app.state.popup_pane = None;
++    shutdown_test_runtimes(&mut server);
++}
++
++#[tokio::test]
++async fn input_origin_clipboard_image_and_raw_attach_are_attributed() {
++    let (mut server, panes, _receivers) = setup();
++    assert!(server.paste_client_clipboard_image_path(
++        2,
++        protocol::ClientClipboardImageTarget::Pane(panes[0].clone()),
++        "/tmp/test-image.png".into()
++    ));
++    assert_eq!(
++        last_input(&mut server, &panes[0]).unwrap().kind,
++        "clipboard_image"
++    );
++    let (workspace, pane) = server.app.parse_pane_id(&panes[0]).unwrap();
++    let terminal_id = server.app.state.workspaces[workspace]
++        .terminal_id(pane)
++        .unwrap()
++        .to_string();
++    server.clients.get_mut(&1).unwrap().mode = ClientConnectionMode::TerminalAttach { terminal_id };
++    server.handle_server_event(ServerEvent::ClientInput {
++        client_id: 1,
++        data: b"x".to_vec(),
++    });
++    let input = last_input(&mut server, &panes[0]).unwrap();
++    assert_eq!(input.kind, "raw_input");
++    assert_eq!(
++        input.client.unwrap().ssh_connection.as_deref(),
++        Some("127.0.0.1 1111 100.1.2.3 22")
++    );
++    shutdown_test_runtimes(&mut server);
++}
+diff --git a/src/server/headless/tests/mod.rs b/src/server/headless/tests/mod.rs
+index 27f3bfff8ebc469165f9d0e8eedf66fb4c47c967..5dd1db4f2e8daaea86a46501dc62d6f0506624e4 100644
+--- a/src/server/headless/tests/mod.rs
++++ b/src/server/headless/tests/mod.rs
+@@ -1,6 +1,8 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use super::*;
+ 
+ mod event_fairness;
++mod input_origin;
+ mod native_graphics;
+ #[path = "pane_move.rs"]
+ mod pane_move_tests;
+@@ -106,6 +108,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
+         client_socket_path: socket_path,
+         client_socket_identity,
+         clients: HashMap::new(),
++        terminal_last_input: Default::default(),
+         native_graphics: Default::default(),
+         #[cfg(unix)]
+         next_client_id: 1,
+@@ -719,6 +722,7 @@ async fn client_shell_attach_seeds_workspace() {
+ 
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -752,6 +756,7 @@ async fn completion_guard_endpoint_pairs_runtime_completions_with_snapshots() {
+     server.app.state.active = Some(0);
+     let (writer, control_rx, _render_rx) = test_client_writer();
+     server.handle_server_event(ServerEvent::ClientShellConnected {
++        origin: None,
+         client_id: 78,
+         surface_cols: 80,
+         surface_rows: 24,
+@@ -811,6 +816,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
+     let client_id = 41;
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -930,6 +936,7 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
+     let (writer, control_rx, _render_rx) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -1033,6 +1040,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
+     let (writer, control_rx, render_rx) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -1201,6 +1209,7 @@ fn connect_test_shell(
+     let (writer, control, render) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -1806,6 +1815,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
+     let (local_writer, local_control, _local_render) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -1831,6 +1841,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
+     let (endpoint_writer, endpoint_control, _endpoint_render) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -2751,6 +2762,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
+     let (writer, control_rx, render_rx) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -2998,6 +3010,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
+     let (writer, control_rx, render_rx) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+diff --git a/src/server/headless/tests/surface_interest.rs b/src/server/headless/tests/surface_interest.rs
+index a7da046ea1897ef576042f2feb6643356c01c4ad..5552d58da3a99f8b34651a2eff6ef01c0fdce1e5 100644
+--- a/src/server/headless/tests/surface_interest.rs
++++ b/src/server/headless/tests/surface_interest.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ use super::*;
+ 
+ use std::sync::{Arc, Mutex};
+@@ -64,6 +65,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
+ 
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -280,6 +282,7 @@ async fn background_surface_activation_preserves_focused_viewer_geometry() {
+     let (writer, background_control, _) = test_client_writer();
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -394,6 +397,7 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
+     let client_id = 63;
+     assert!(
+         server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -511,6 +515,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
+     let source_client_id = 78;
+     assert!(
+         source_server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+@@ -535,6 +540,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
+     let target_client_id = 79;
+     assert!(
+         target_server.handle_server_event(ServerEvent::ClientShellConnected {
++            origin: None,
+             surface_reuse: false,
+             surface_delta: false,
+             surface_scroll: false,
+diff --git a/src/update.rs b/src/update.rs
+index 854bacdcee8d58a111360453fe520ac9e8671c59..2f0b98f52b04f6066ca05308ff07c6c2a27f8355 100644
+--- a/src/update.rs
++++ b/src/update.rs
+@@ -1,3 +1,4 @@
++// Modified for the Herdr Codex Voice community canary; see HERDR_VOICE_CANARY_CHANGES.md.
+ //! Self-update mechanism.
+ //!
+ //! Checks the hosted herdr.dev update manifest for newer versions.
+@@ -3055,6 +3056,7 @@ mod tests {
+                 surface_interest: true,
+                 health_check: true,
+                 ssh_agent_registration: false,
++                pane_last_input: false,
+             }),
+         };
+         let missing_baseline = crate::api::RuntimeStatus {
+@@ -3130,6 +3132,7 @@ mod tests {
+                     surface_interest: true,
+                     health_check: true,
+                     ssh_agent_registration: false,
++                    pane_last_input: false,
+                 }),
+             },
+         };
+@@ -3389,6 +3392,7 @@ mod tests {
+                     surface_interest: true,
+                     health_check: true,
+                     ssh_agent_registration: false,
++                    pane_last_input: false,
+                 }),
+             },
+         };

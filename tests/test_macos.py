@@ -43,6 +43,48 @@ class MacDesktopTests(unittest.TestCase):
             self.assertEqual(captured['owner'], os.getpid())
             self.assertFalse(captured['job'].parent.exists())
 
+    def test_explicit_output_file_replaces_the_terminal(self):
+        captured = {}
+        def opened(argv, **kwargs):
+            job = Path(argv[-1])
+            captured.update(json.loads(job.read_text()))
+            (job.parent / 'exit').write_text('0')
+            return subprocess.CompletedProcess(argv, 0)
+        with patch.object(macos, 'APP', self.app), patch.object(macos, 'check_desktop'), \
+             patch.object(macos.os, 'ttyname', side_effect=OSError('not a terminal')), \
+             patch.object(macos.signal, 'signal'), patch.object(macos.subprocess, 'run', side_effect=opened):
+            self.assertEqual(macos.launch('/usr/bin/osascript', [], tty='/tmp/output'), 0)
+        self.assertEqual(captured['tty'], '/tmp/output')
+
+    def test_status_reports_the_apps_microphone_permission(self):
+        binary = self.app / 'Contents/MacOS/desktop-runner'
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        cases = (('3\n', 0, 'authorized'), ('0\n', 0, 'not_determined'), ('2', 0, 'denied'),
+                 ('1', 0, 'restricted'), ('garbage', 0, 'unknown'), ('3', 1, 'unknown'))
+        for answer, code, expected in cases:
+            def launched(program, args, tty=None):
+                self.assertEqual(program, '/usr/bin/osascript')
+                Path(tty).write_text(answer)
+                return code
+            with patch.object(macos, 'APP', self.app), patch.object(macos, 'check_desktop'), \
+                 patch.object(macos, 'launch', side_effect=launched):
+                self.assertEqual(macos.status(), {'desktop_session': True, 'app_installed': True,
+                                                  'microphone': expected}, answer)
+
+    def test_status_never_launches_without_desktop_session_or_app(self):
+        with patch.object(macos, 'APP', self.app), patch.object(macos, 'launch') as launch:
+            with patch.object(macos, 'check_desktop', side_effect=RuntimeError('Log into the desktop')):
+                binary = self.app / 'Contents/MacOS/desktop-runner'
+                binary.parent.mkdir(parents=True)
+                binary.touch()
+                self.assertFalse(macos.status()['desktop_session'])
+            binary.unlink()
+            with patch.object(macos, 'check_desktop'):
+                self.assertEqual(macos.status(), {'desktop_session': True, 'app_installed': False,
+                                                  'microphone': 'unknown'})
+            launch.assert_not_called()
+
     def test_launch_failure_does_not_signal_unrelated_processes(self):
         with patch.object(macos, 'APP', self.app), patch.object(macos, 'check_desktop'), \
              patch.object(macos.os, 'ttyname', return_value='/dev/ttys-test'), \

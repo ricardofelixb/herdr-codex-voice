@@ -1,0 +1,41 @@
+{
+  "api_method": "pane.last_input",
+  "base_manifest": "base-files.json",
+  "base_manifest_sha256": "530c1092f926171f1be1ac9a22b82c21bd4f4abcbe2b66ba98fbfd29fdada43a",
+  "build": {
+    "channel": "voice-canary",
+    "codegen_units": 64,
+    "commit": "7b116c05",
+    "ghostty_optimize": "ReleaseFast",
+    "id": "20261006.1",
+    "lto": false,
+    "opt_level": 1,
+    "profile": "release",
+    "rust": "1.96.1",
+    "zig": "0.16.0"
+  },
+  "capability": "pane_last_input",
+  "cargo_lock_sha256": "bb3ab17351af496a2cc316a11c81a97f90959cd37c3d5625f2f8028c0133ffca",
+  "endpoint_generation": 1,
+  "format": 1,
+  "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+  "modification_notice": "HERDR_VOICE_CANARY_CHANGES.md",
+  "name": "Herdr input-origin community canary",
+  "patch": "herdr-v0.9.3-input-origin.patch",
+  "patch_sha256": "9210e09ca45ea5e9a8dfd249ddfa7450934509335f5a099a20610483d97f8de9",
+  "protocol": 22,
+  "schema_sha256": "8863da3f93b4c5dda4ca4563cd102a8186aa58a9b68429e1f556c931d960c137",
+  "source_file_count": 2811,
+  "source_manifest": "source-files.json",
+  "source_manifest_sha256": "b6aa32e99a890cf6a85cbd608977ec18fcde1efde8ce4b4ddd6336f9fef5edf8",
+  "upstream": {
+    "commit": "7b116c05bfda646af39d2524c54e70c751f57ee8",
+    "license": "Apache-2.0",
+    "repository": "https://github.com/herdrdev/herdr",
+    "tag": "v0.9.3",
+    "tag_object": "7eaf574ba6362c36c3d8fe89f411bb7d5bb34660",
+    "tree": "17ff0e2ba59b2d8a99c0ca9c898af901d23d8928"
+  },
+  "version": "0.9.3-voice-canary.20261006.1",
+  "version_sha256": "2b7eb121e3a8dc781a312f36e302e49339ac7badfa1bb4950d1434f4a9d55cda"
+}

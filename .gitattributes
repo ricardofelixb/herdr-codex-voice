@@ -1,0 +1,5 @@
+# Keep helper/app revision hashes stable across Git checkouts on all platforms.
+*.py text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
