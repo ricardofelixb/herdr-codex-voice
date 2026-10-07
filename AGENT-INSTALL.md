@@ -29,12 +29,13 @@ at, and `NAME` with a short label such as `Laptop`.
 | Microphone computer | Work computer: macOS or Linux (WSL counts as Linux) | Work computer: native Windows |
 |---|---|---|
 | macOS | Supported. Codex's terminal runs on the Mac through a background **Codex Voice** app. | Experimental. Codex's terminal stays on Windows; only its voice helper runs on the Mac, through a separate **Codex Voice Audio** app. |
+| macOS, paired with `--audio-only` | Preview. Codex's terminal stays on the work computer; **Codex Voice Audio** starts the Mac helper when needed. | Already uses this route. |
 | Linux desktop | Supported. Codex's terminal runs there. | Not supported |
 | Windows | Experimental. Only Codex's voice helper runs on the PC. | Not supported |
 | Same computer (`--local`) | Supported | Experimental (plain Codex) |
 | Phone or tablet | Not supported | Not supported |
 
-Both "voice helper only" routes need exactly the same Codex build on the two
+All "voice helper only" routes need exactly the same Codex build on the two
 computers; setup picks an installed matching helper and never upgrades Codex.
 A Codex terminal on macOS or Linux cannot open threads on a Windows Codex
 backend, which is why a Windows work computer keeps its terminal. The native
@@ -119,7 +120,7 @@ fingerprint; never disable host key checking.
 ## 2. Install the plugin
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref perf/startup-latency ricardofelixb/herdr-codex-voice
 "$HOME/.local/bin/codex-voice" doctor --json --offline
 ```
 
@@ -143,6 +144,43 @@ alias. `codex-voice unpair NAME --json` forgets one (`--default` forgets the
 one made by `setup`). On a Windows work computer, `--codex PATH` pairs with an
 explicitly chosen installed `codex.exe` instead of the one on PATH.
 
+### Faster Mac-to-Unix startup
+
+For a macOS or Linux work computer with a remote Mac microphone, use:
+
+```sh
+codex-voice pair NAME HOST --audio-only --json
+# Or, for the single default pairing:
+codex-voice setup HOST --audio-only --json
+codex-voice doctor --json --microphone NAME
+```
+
+This is a preview. Check `result.pairing.route == "mac-audio-helper"` and
+`doctor`'s exact-build and desktop-app checks. It needs the official native or
+npm Codex package layout and the same Codex build on both sides. A mismatch
+stops setup or launch; do not silently switch microphones or upgrade Codex.
+There is no Rust build on Unix and no socket forwarding requirement for this
+route. SSH still must work without prompts.
+
+Replace the existing pairing by using the same `NAME`; do not add a second
+name for the same Tailscale node. `setup HOST --audio-only` also updates named
+pairings for that host. The option persists in the pairing. Daily use remains
+`codex`, with the usual automatic input-origin selection. No new shell block
+or recurring `source` command is needed when updating an existing installation.
+
+The terminal now reads profiles, image paths and clipboard images on the work
+computer. Verify any image workflow the person uses, plus resuming an existing
+thread, speech recognition and playback. The first `/voice` may ask for
+**Codex Voice Audio** permission if that app has not been authorized before.
+Rollback is the same `pair NAME HOST --json` or `setup HOST --json` without
+`--audio-only`, followed by restarting Codex. Both forms of `setup HOST` switch
+every pairing for that host; use `pair NAME HOST` to change only one named pairing.
+`doctor`'s repair commands retain
+the chosen mode. Updates alone do not migrate existing pairings.
+
+See [PERFORMANCE.md](PERFORMANCE.md) for the benchmark method, results and
+remaining validation. A fast composer is not proof that `/voice` is ready.
+
 Pairing writes only:
 
 - `~/.local/bin/codex-voice` (refreshed launcher);
@@ -157,8 +195,9 @@ Pairing writes only:
 - on a Mac microphone computer, `~/.local/share/herdr-codex-voice` (small
   background apps, compiled once);
 - on a Windows microphone computer, one launcher in `$env:USERPROFILE\.herdr-codex-voice`;
-- on a Windows work computer, the relay built from source and, at launch,
-  private copies of the Codex package in the plugin's configuration directory.
+- on a Windows work computer, the relay built from source;
+- for all voice-helper-only routes, private copies of the Codex package in the
+  plugin's configuration directory at launch. Installed Codex files stay intact.
 
 It never modifies Codex installations, copies credentials, accepts host keys,
 changes OS privacy or security settings, or creates login items or daemons.
@@ -202,7 +241,7 @@ Give the person the `human` steps from `next_steps`, then these checks from
    open a new pane. New panes and later reboots need nothing.
 2. In a new pane on the work computer, run `codex`, then `/voice`.
 3. On a Mac, click **Allow** when macOS asks about **Codex Voice** (or **Codex
-   Voice Audio** for a Windows work computer); first time only, and possibly
+   Voice Audio** for an audio-only pairing); first time only, and possibly
    again after an update that changes the app.
 4. Speak; confirm the words are recognized. Confirm Codex's spoken reply plays
    on the microphone computer.
@@ -227,7 +266,7 @@ Tailscale on that computer and pairing it again.
 ## Update
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref perf/startup-latency ricardofelixb/herdr-codex-voice
 codex-voice doctor --json
 ```
 
@@ -263,7 +302,7 @@ Every `--json` command prints one JSON document on stdout:
 {
   "schema": "herdr-codex-voice/1",
   "command": "setup",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "ok": false,
   "result": null,
   "error": {"code": "ssh_auth_failed", "message": "..."},

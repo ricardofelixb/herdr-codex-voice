@@ -30,12 +30,12 @@ computer must work without prompts (`ssh -o BatchMode=yes HOST true`); put
 users, ports and keys in `~/.ssh/config` and use the alias.
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref perf/startup-latency ricardofelixb/herdr-codex-voice
 $HOME/.local/bin/codex-voice setup you@your-microphone-computer
 $HOME/.local/bin/codex-voice doctor
 ```
 
-Until this release is merged, keep `--ref windows-multihost`; the default branch
+Until this release is merged, keep `--ref perf/startup-latency`; the default branch
 holds an older version.
 
 Setup discovers paths, checks the backend, saves the pairing and adds a marked
@@ -72,6 +72,28 @@ repository packages it as a separately licensed source canary in
 [canary/](canary/README.md), which the plugin does not install. Unknown, disconnected or ambiguous input never
 silently selects a microphone. The route stays with that Codex session; restart
 or resume Codex after switching computers.
+
+## Faster startup with a Mac microphone (preview)
+
+On a macOS or Linux work computer, an agent can pair a Mac with `--audio-only`:
+
+```sh
+codex-voice pair Laptop you@your-mac --audio-only --json
+```
+
+Use the existing pairing name when updating a setup. Afterwards, keep typing
+`codex` as usual. The terminal runs on the work computer immediately; SSH and
+the Mac's **Codex Voice Audio** app start when Codex needs the microphone helper.
+Both computers need exactly the same Codex build. Setup never upgrades either.
+This uses the same Mac app as the Windows work computer route, so an existing
+microphone grant for that app still applies.
+
+This option changes where the terminal reads files: images, frontend profiles
+and clipboard image access belong to the work computer. Check `resume`, image
+workflows, speech and playback before adopting it. Re-pair under the same name
+without `--audio-only` to restore the remote Mac terminal. Existing pairings
+keep their current route when the plugin updates. See [measured startup times
+and validation limits](PERFORMANCE.md).
 
 ## Windows microphone (experimental)
 
@@ -115,7 +137,8 @@ whether the plugin is enabled, `codex` stops with an error instead of silently
 using the work computer's microphone.
 
 Files read by the Codex terminal, such as image attachments and frontend
-profiles, must exist on the microphone computer (Mac/Linux routes).
+profiles, must exist on the microphone computer for the default Mac/Linux
+frontend routes, or on the work computer for voice-helper-only routes.
 
 ## How it works
 
@@ -159,7 +182,7 @@ Run `codex-voice doctor` first; each failure names a code and a fix (see
 ## Update or remove
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice   # update
+herdr plugin install --yes --ref perf/startup-latency ricardofelixb/herdr-codex-voice   # update
 codex-voice unsetup --purge                         # remove alias, pairings, launcher
 herdr plugin uninstall herdr-codex-voice
 ```
