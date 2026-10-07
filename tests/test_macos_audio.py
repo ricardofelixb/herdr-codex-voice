@@ -31,17 +31,23 @@ def fake_app(argv):
     job = Path(argv[-1])
     request = json.loads(job.read_text())
 
+    def write(name, text):
+        # Match Swift's atomic writes: the controller must not see an empty status file.
+        pending = job.parent / (name + ".tmp")
+        pending.write_text(text)
+        pending.replace(job.parent / name)
+
     def app():
         try:
             with socket.socket(socket.AF_UNIX) as stream:
                 stream.connect(request["socket"])
                 child = subprocess.Popen([request["program"]], stdin=stream, stdout=stream,
                                          stderr=subprocess.DEVNULL, env=request["env"])
-            (job.parent / "pids").write_text(f"{os.getpid()} {child.pid} 0")
-            (job.parent / "exit").write_text(str(child.wait()))
+            write("pids", f"{os.getpid()} {child.pid} 0")
+            write("exit", str(child.wait()))
         except OSError as error:
-            (job.parent / "error").write_text(str(error))
-            (job.parent / "exit").write_text("1")
+            write("error", str(error))
+            write("exit", "1")
 
     threading.Thread(target=app, daemon=True).start()
     return subprocess.CompletedProcess(argv, 0)
