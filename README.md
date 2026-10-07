@@ -43,6 +43,7 @@ alias block to `.bashrc` or `.zshrc` (keeping a backup of the original). Open a
 new Herdr pane, type `codex`, then `/voice`. A pane that was already open still
 has its old shell: quit Codex there and run `source ~/.bashrc` (or
 `source ~/.zshrc`) once, or open a new pane. New panes and reboots need nothing.
+That reload is once per shell that was open before setup, not once per computer.
 Bash and Zsh get the alias; other shells can run `codex-voice run`. Herdr's
 plugin actions also offer **Set up Codex voice**.
 
@@ -143,6 +144,11 @@ for microphone approval again. SSH keys and Codex credentials stay where they ar
 Run `codex-voice doctor` first; each failure names a code and a fix (see
 [AGENT-INSTALL.md](AGENT-INSTALL.md#codes)).
 
+- **An old pane says "Failed to connect voice mode":** after exiting Codex,
+  run `codex-voice doctor` in that pane. `shell_reload_needed` means it predates
+  setup and may still launch plain Codex using the work computer's audio.
+  Reload that shell once or open a new pane. A passing check in a separate SSH
+  session or fresh test pane does not update an existing shell.
 - **SSH errors:** make `ssh -o BatchMode=yes HOST true` work. Trust new host
   keys with a normal `ssh HOST` first.
 - **Forwarding denied:** the microphone computer's OpenSSH server must allow
