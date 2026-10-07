@@ -156,9 +156,10 @@ def manifest_version(root):
 def refresh(path, mic):
     """The idempotent command that re-pairs this microphone."""
     host = "--local" if mic.get("local") else mic.get("host", "HOST")
+    mode = " --audio-only" if mic.get("mac_audio") and sys.platform != "win32" else ""
     if path.name == "config.json":
-        return f"codex-voice setup {shlex.quote(host)} --json"
-    return f"codex-voice pair {shlex.quote(mic.get('label', 'NAME'))} {shlex.quote(host)} --json"
+        return f"codex-voice setup {shlex.quote(host)}{mode} --json"
+    return f"codex-voice pair {shlex.quote(mic.get('label', 'NAME'))} {shlex.quote(host)}{mode} --json"
 
 
 def herdr(report):
@@ -594,7 +595,7 @@ def windows_microphone(report, scope, path, mic, work_commit):
 
 
 def mac_audio_microphone(report, scope, path, mic, work_commit):
-    """Windows work computer: only Codex's voice helper runs on the Mac, through Codex Voice Audio."""
+    """Only Codex's voice helper runs on the Mac, through Codex Voice Audio."""
     host, route = mic["host"], mic["mac_audio"]
     facts = {}
     again = voice.step("agent", "Pair it again.", refresh(path, mic))

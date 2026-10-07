@@ -18,8 +18,8 @@ import sys
 import uuid
 
 PLUGIN = "herdr-codex-voice"
-VERSION = "0.5.0"
-INSTALL_REF = "windows-multihost"  # Git ref agents install until this release is merged
+VERSION = "0.6.0"
+INSTALL_REF = "perf/startup-latency"  # Git ref agents install until this release is merged
 SCHEMA = "herdr-codex-voice/1"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
@@ -41,7 +41,7 @@ SSH_FAILURES = ((r"REMOTE HOST IDENTIFICATION HAS CHANGED", "ssh_host_key_change
                  r"No route to host|Network is unreachable", "ssh_unreachable"))
 PHYSICAL_CHECKS = [
     "On the microphone computer, allow microphone access if the OS asks (macOS asks for Codex Voice, "
-    "or Codex Voice Audio when the work computer runs Windows, during the first /voice).",
+    "or Codex Voice Audio for an audio-only pairing, during the first /voice).",
     "In a new Herdr pane on the work computer, run codex, then /voice, and speak; "
     "confirm the words are recognized.",
     "Confirm Codex's spoken reply plays on the microphone computer's speakers or headset.",
@@ -362,7 +362,7 @@ def prepare_desktop(mic, root=None):
 
 
 def prepare_mac_audio(mic, codex, root=None):
-    """Windows work computer: install the Mac audio controller and pick its exact-build helper."""
+    """Install the Mac audio controller and pick its exact-build helper."""
     controller, revision = deploy(mic, root, "macos_audio")
     load_module("windows_host", root).pair(mic, codex, controller, revision, SSH, run)
 
@@ -492,7 +492,7 @@ def choose_microphone(directory, select=None):
             return choices[int(answer) - 1]
 
 
-def setup(host=None, name=None, codex=None):
+def setup(host=None, name=None, codex=None, audio_only=False):
     """Pair a microphone computer and install the shell integration; idempotent.
 
     `codex` names the Windows work computer's Codex explicitly, for example an
@@ -516,17 +516,20 @@ def setup(host=None, name=None, codex=None):
     if host is None:
         host = input("Microphone computer's SSH alias or user@Tailscale-name: ").strip()
     mic = probe(None if host == "--local" else host)
+    if audio_only and (mic.get("local") or mic.get("platform") != "darwin"):
+        raise InputError("usage", "--audio-only pairs a remote Mac microphone; other routes do not need this option")
     if codex is not None and not Path(codex).is_file():
         raise VoiceError("codex_missing", f"{codex} does not exist")
     work_codex = codex
     codex = codex or shutil.which("codex")
     if not codex:
         raise VoiceError("codex_missing", "Install Codex CLI on this work computer first")
-    if sys.platform == "win32" and not mic.get("local"):
-        # Codex's terminal and backend stay on Windows; only its voice helper runs on the Mac.
+    if (sys.platform == "win32" or audio_only) and not mic.get("local"):
+        # Codex's terminal and backend stay here; only its voice helper runs on the Mac.
         if mic.get("platform") != "darwin":
             raise VoiceError("unsupported_route", "A Windows work computer can use only a Mac microphone computer")
-        load_module("windows_host").build_relay(directory)
+        if sys.platform == "win32":
+            load_module("windows_host").build_relay(directory)
         prepare_mac_audio(mic, codex)
         if work_codex:
             mic["work_codex"] = os.path.abspath(work_codex)
@@ -733,20 +736,22 @@ def connect(args):
     select = None
     if os.environ.get("HERDR_SOCKET_PATH") and os.environ.get("HERDR_PANE_ID"):
         select = load_module("client_origin", root).select
-    path, mic = choose_microphone(config_dir(), select)
+    directory = config_dir()
+    path, mic = choose_microphone(directory, select)
     if mic.get("local") or (mic.get("platform") != "win32" and mic["hostname"] == socket.gethostname()):
         become(plain)
     root = root or plugin_root()
-    if sys.platform == "win32":
-        connect_windows(path, mic, codex, args, root)
+    if sys.platform == "win32" or mic.get("mac_audio"):
+        connect_mac_audio(path, mic, codex, args, root, directory)
     if mic.get("platform") == "win32":
         audio = load_audio(root)
-        if audio.stale(mic, codex):
+        package = audio.work_package(codex)
+        if package[1] != mic.get("audio", {}).get("build_commit"):
             mic = keep(mic, probe(mic["host"], root))
             prepare_windows(mic, root)
             write_private(path, json.dumps(mic, indent=2) + "\n")
         audio.run_codex(mic, codex, args, [shutil.which("ssh"), *SSH[1:]],
-                        config_dir() / "windows-voice-packages")
+                        directory / "windows-voice-packages", package=package)
     if "platform" not in mic or (mic["platform"] == "darwin" and mic.get("desktop_revision") != desktop_revision(root)):
         mic = keep(mic, probe(mic["host"]))
         prepare_desktop(mic, root)
@@ -755,20 +760,27 @@ def connect(args):
     os.execvp(command[0], command)
 
 
-def connect_windows(path, mic, codex, args, root):
-    """Native Windows work computer: Codex runs here and only its voice helper runs on the Mac."""
+def connect_mac_audio(path, mic, codex, args, root, directory):
+    """Codex runs here and only its voice helper runs on the Mac."""
     if not mic.get("mac_audio"):
         raise VoiceError("unsupported_route", "A Windows work computer can use only a Mac microphone computer; "
                                               "pair one with codex-voice pair NAME MAC-HOST")
     windows = load_module("windows_host", root)
     codex = mic.get("work_codex") or codex
     revision = hashlib.sha256((Path(root) / "macos_audio.py").read_bytes()).hexdigest()
-    if windows.stale(mic, codex) or mic["mac_audio"].get("revision") != revision:
+    package = windows.audio.work_package(codex)
+    if package[1] != mic["mac_audio"].get("build_commit") or mic["mac_audio"].get("revision") != revision:
         # Codex here or the plugin changed: pick the matching Mac helper again.
         mic = keep(mic, probe(mic["host"], root))
         prepare_mac_audio(mic, codex, root)
         write_private(path, json.dumps(mic, indent=2) + "\n")
-    raise SystemExit(windows.run_codex(mic, codex, args, config_dir(), shutil.which("ssh"), SSH[1:]))
+    if sys.platform == "win32":
+        raise SystemExit(windows.run_codex(mic, codex, args, directory, shutil.which("ssh"), SSH[1:], package=package))
+    if package[1] != mic["mac_audio"]["build_commit"]:
+        raise VoiceError("mac_helper_build_mismatch", "Codex changed while refreshing the pairing; restart Codex "
+                         "to use the refreshed pairing")
+    windows.audio.run_package(package, args, [shutil.which("ssh"), *SSH[1:]], mic["host"],
+                              windows.remote_command(mic), directory / "windows-voice-packages", local_probe=True)
 
 
 ERRORS = (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError)
@@ -789,8 +801,8 @@ FIXES = {
     "unsupported_platform": ("agent", "Run Herdr and this plugin on macOS, Linux, WSL or Windows."),
     "unsupported_route": ("agent", "Pair a Mac microphone computer; a native Windows work computer cannot use "
                                    "other microphone computers yet."),
-    "mac_helper_build_mismatch": ("agent", "Install the same Codex build on {host} as on this work computer (or "
-                                           "pass --codex with a matching installed Codex here), then rerun setup. "
+    "mac_helper_build_mismatch": ("agent", "Make the Codex builds match on {host} and this work computer, then "
+                                           "repeat the original pairing command with the same name and options. "
                                            "Ask before replacing a Codex version the person relies on."),
     "windows_relay_missing": ("agent", "Build the Windows voice relay from the plugin's source.",
                               "codex-voice build-relay --json"),
@@ -859,15 +871,17 @@ def perform(action, args, interactive):
     """Run a setup command; return (result, human lines, next steps)."""
     if action == "setup":
         codex, args = option(args, "--codex")
+        audio_only, args = "--audio-only" in args, [arg for arg in args if arg != "--audio-only"]
         if len(args) > 1 or (not args and not interactive):
-            raise InputError("usage", "Usage: codex-voice setup SSH-HOST|--local [--codex PATH] [--json]")
-        result = setup(args[0] if args else None, codex=codex)
+            raise InputError("usage", "Usage: codex-voice setup SSH-HOST|--local [--codex PATH] [--audio-only] [--json]")
+        result = setup(args[0] if args else None, codex=codex, audio_only=audio_only)
         return result, setup_lines(result), setup_steps(result)
     if action == "pair":
         codex, args = option(args, "--codex")
+        audio_only, args = "--audio-only" in args, [arg for arg in args if arg != "--audio-only"]
         if len(args) != 2:
-            raise InputError("usage", "Usage: codex-voice pair NAME SSH-HOST|--local [--codex PATH] [--json]")
-        result = setup(args[1], args[0], codex)
+            raise InputError("usage", "Usage: codex-voice pair NAME SSH-HOST|--local [--codex PATH] [--audio-only] [--json]")
+        result = setup(args[1], args[0], codex, audio_only=audio_only)
         return result, setup_lines(result), setup_steps(result)
     if action == "unpair":
         if len(args) != 1:
@@ -927,7 +941,7 @@ def main(argv=None):
         host = None  # Named in remedies; the last plain argument of setup and pair.
         if action in ("setup", "pair"):
             try:
-                rest = option(args, "--codex")[1]
+                rest = [arg for arg in option(args, "--codex")[1] if arg != "--audio-only"]
             except InputError:
                 rest = []
             host = next((arg for arg in rest[-1:] if arg != "--local"), None)
@@ -959,6 +973,7 @@ def main(argv=None):
         print("codex-voice setup [SSH-HOST]   Pair once and enable codex in Herdr\n"
               "codex-voice setup --local     Use this computer's microphone without SSH\n"
               "codex-voice pair NAME HOST    Save a microphone for selection at Codex launch\n"
+              "Add --audio-only to setup/pair for a Mac microphone with native Codex here (exact build required).\n"
               "codex-voice unpair NAME       Forget a saved microphone (--default: the setup one)\n"
               "codex-voice doctor            Check installation, pairings and routes (--offline, --microphone NAME)\n"
               "codex-voice run [CODEX-ARGS]  Run with the saved microphone computer\n"

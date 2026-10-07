@@ -323,7 +323,7 @@ class VoiceWindowsTests(unittest.TestCase):
              patch.object(os, "execv") as execute, \
              patch.object(sys.stdin, "isatty", return_value=True), \
              patch.object(sys.stdout, "isatty", return_value=True):
-            load.return_value.stale.return_value = False
+            load.return_value.work_package.return_value = (root, COMMIT)
             load.return_value.run_codex.side_effect = SystemExit
             with self.assertRaises(SystemExit):
                 voice.connect([])
@@ -350,21 +350,22 @@ class VoiceWindowsTests(unittest.TestCase):
                "audio": {"build_commit": COMMIT, "command": "py -3 x"}}
         (root / "config.json").write_text(json.dumps(mic))
         listing = json.dumps({"result": {"plugins": [{"enabled": True, "plugin_root": str(Path(voice.__file__).parent)}]}})
-        with patch.object(voice, "config_dir", return_value=root), \
+        with patch.object(voice, "config_dir", return_value=root) as config_dir, \
              patch.object(voice, "run", return_value=listing), \
              patch.object(voice.shutil, "which", side_effect=lambda n: "/bin/" + n), \
              patch.object(voice, "backend") as backend, \
              patch.object(voice, "load_audio", return_value=audio_host), \
-             patch.object(audio_host, "work_package", return_value=(root, COMMIT)), \
-             patch.object(audio_host, "run_codex") as run_codex, \
+             patch.object(audio_host, "work_package", return_value=(root, COMMIT)) as work_package, \
+             patch.object(audio_host, "prepare_package", return_value=root / "bin/codex"), \
+             patch.object(os, "execv", side_effect=SystemExit) as execute, \
              patch.object(sys.stdin, "isatty", return_value=True), \
              patch.object(sys.stdout, "isatty", return_value=True):
-            run_codex.side_effect = SystemExit
             with self.assertRaises(SystemExit):
                 voice.connect(["resume", "--last"])
         backend.assert_not_called()
-        self.assertEqual(run_codex.call_args.args[2], ["resume", "--last"])
-        self.assertEqual(run_codex.call_args.args[3][0], "/bin/ssh")
+        config_dir.assert_called_once_with()
+        work_package.assert_called_once_with("/bin/codex")
+        execute.assert_called_once_with(str(root / "bin/codex"), [str(root / "bin/codex"), "resume", "--last"])
 
 
 if __name__ == "__main__":

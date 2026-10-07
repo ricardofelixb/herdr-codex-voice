@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -197,7 +198,7 @@ def npm_native(wrapper):
         official = False
     node = shutil.which("node")
     if wrapper.parent.name != "bin" or not official or not node:
-        raise AudioHostError("windows_layout_unsupported", "This Codex install layout is not supported for Windows voice")
+        raise AudioHostError("windows_layout_unsupported", "This Codex install layout is not supported for audio-only voice")
     try:
         result = subprocess.run([node, "-e", NODE_RESOLVE, str(wrapper)], stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=10, check=True)
@@ -234,7 +235,7 @@ def work_package(codex):
     package = real.parent.parent
     helper = package / helper_of(real)
     if real.name not in ("codex", "codex.exe") or real.parent.name != "bin" or not helper.is_file():
-        raise AudioHostError("windows_layout_unsupported", "Windows microphone mode needs a Codex package with "
+        raise AudioHostError("windows_layout_unsupported", "Audio-only voice needs a Codex package with "
                              "codex-resources/voice; this Codex install layout is not supported")
     result = subprocess.run([str(helper), "--build-commit"], stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, timeout=10)
@@ -279,9 +280,13 @@ def clone(source, destination):
         shutil.copy2(source, destination)
 
 
-def prepare_package(package, commit, argv, cache, auth_sock=None):
+def prepare_package(package, commit, argv, cache, auth_sock=None, *, build_commit=None):
     """Return a private, content-addressed copy of `package` whose helper runs `argv`."""
-    shim = ("#!" + sys.executable + "\nimport os\ncommand = " + repr(list(argv)) + "\n"
+    probe = ("import sys\n"
+             "if sys.argv[1:] == ['--build-commit']:\n"
+             f"    print({build_commit!r}); sys.exit(0)\n"
+             "if len(sys.argv) != 1: sys.exit(2)\n") if build_commit is not None else ""
+    shim = ("#!" + sys.executable + "\nimport os\n" + probe + "command = " + repr(list(argv)) + "\n"
             "env = dict(os.environ)\n"
             + (f"env['SSH_AUTH_SOCK'] = {auth_sock!r}\n" if auth_sock else "")
             + "os.execve(command[0], command, env)\n")
@@ -307,7 +312,7 @@ def private_copy(package, commit, cache, replacements):
             path = os.path.join(directory, name)
             info = os.lstat(path)
             files.append([os.path.relpath(path, package), info.st_size, info.st_mtime_ns, info.st_ino,
-                          os.readlink(path) if os.path.islink(path) else ""])
+                          os.readlink(path) if stat.S_ISLNK(info.st_mode) else ""])
     contents = {name: hashlib.sha256(data).hexdigest() for name, data in sorted(replacements.items())}
     key = hashlib.sha256(json.dumps([commit, str(package), sorted(files), contents]).encode()).hexdigest()[:24]
     final = cache / key
@@ -324,7 +329,7 @@ def private_copy(package, commit, cache, replacements):
         if any((temporary / parent).is_symlink() for parent in tuple(helper.parents)[:3]) \
                 or (temporary / executable).is_symlink() or not (temporary / executable).is_file() \
                 or target.is_symlink() or not target.is_file():
-            raise AudioHostError("windows_layout_unsupported", "Codex package layout is not supported for Windows voice")
+            raise AudioHostError("windows_layout_unsupported", "Codex package layout is not supported for audio-only voice")
         target.parent.chmod(target.parent.stat().st_mode | 0o700)
         for name, data in replacements.items():
             path = target.parent / name
@@ -342,13 +347,20 @@ def private_copy(package, commit, cache, replacements):
     return final / executable
 
 
-def run_codex(mic, codex, args, ssh, cache):
+def run_codex(mic, codex, args, ssh, cache, *, package=None):
     """Replace this process with native Codex using the Windows microphone."""
-    package, commit = work_package(codex)
+    package, commit = package if package is not None else work_package(codex)
     if commit != mic["audio"]["build_commit"]:
         raise AudioHostError("windows_helper_build_mismatch", "Codex changed; rerun codex-voice setup " + mic["host"])
+    run_package((package, commit), args, ssh, mic["host"], mic["audio"]["command"], cache)
+
+
+def run_package(package, args, ssh, host, command, cache, *, local_probe=False):
+    """Launch a checked native package; connect its microphone helper only when Codex needs it."""
+    package, commit = package
     if not ssh[0]:
         raise RuntimeError("OpenSSH client not found")
-    argv = [*ssh, "-o", "ControlPath=none", "-T", mic["host"], mic["audio"]["command"]]
-    executable = str(prepare_package(package, commit, argv, cache, os.environ.get("SSH_AUTH_SOCK")))
+    argv = [*ssh, "-o", "ControlPath=none", "-T", host, command]
+    executable = str(prepare_package(package, commit, argv, cache, os.environ.get("SSH_AUTH_SOCK"),
+                                     build_commit=commit if local_probe else None))
     os.execv(executable, [executable, *args])

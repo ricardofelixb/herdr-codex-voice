@@ -155,9 +155,9 @@ def stale(mic, codex):
     return audio.work_package(codex)[1] != mic.get("mac_audio", {}).get("build_commit")
 
 
-def run_codex(mic, codex, args, state, ssh, options):
+def run_codex(mic, codex, args, state, ssh, options, *, package=None):
     """Run native Codex here with the Mac's microphone and return its exit status."""
-    package, commit = audio.work_package(codex)
+    package, commit = package if package is not None else audio.work_package(codex)
     if commit != mic["mac_audio"]["build_commit"]:
         raise WindowsHostError("mac_helper_build_mismatch", "Codex changed; rerun codex-voice setup " + mic["host"])
     relay = relay_path(state)

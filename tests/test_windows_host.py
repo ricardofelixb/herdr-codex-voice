@@ -120,6 +120,33 @@ sys.exit(5)
         self.assertEqual(raised.exception.code, "mac_helper_build_mismatch")
         self.assertFalse((self.state / "windows-voice-packages").exists())
 
+    def test_launch_checks_the_package_and_configuration_once(self):
+        self.relay("print('relay')\n")
+        mic = {**self.mic, "platform": "darwin", "hostname": "remote-mac",
+               "mac_audio": {**self.mic["mac_audio"], "revision": voice.hashlib.sha256(
+                   (ROOT / "macos_audio.py").read_bytes()).hexdigest()}}
+        (self.root / "config.json").write_text(json.dumps(mic))
+        codex = str(self.package / "bin/codex.exe")
+        listing = json.dumps({"result": {"plugins": [{"enabled": True, "plugin_root": str(ROOT)}]}})
+        previous = signal.getsignal(signal.SIGINT)
+        self.addCleanup(signal.signal, signal.SIGINT, previous)
+        with patch.object(voice.sys, "platform", "win32"), \
+                patch.object(voice, "config_dir", return_value=self.root) as config_dir, \
+                patch.object(voice, "run", return_value=listing), \
+                patch.object(voice, "load_module", return_value=windows_host), \
+                patch.object(voice.shutil, "which", side_effect=lambda name: codex if name == "codex" else str(self.ssh)), \
+                patch.object(windows_host.audio, "work_package", wraps=audio_host.work_package) as work_package, \
+                patch.object(windows_host, "relay_path", return_value=windows_host.relay_path(self.state)), \
+                patch.object(windows_host.subprocess, "call", return_value=7) as launch, \
+                patch.object(sys.stdin, "isatty", return_value=True), \
+                patch.object(sys.stdout, "isatty", return_value=True):
+            with self.assertRaises(SystemExit) as raised:
+                voice.connect(["resume", "--last"])
+        self.assertEqual(raised.exception.code, 7)
+        config_dir.assert_called_once_with()
+        work_package.assert_called_once_with(codex)
+        self.assertEqual(launch.call_args.args[0][1:], ["resume", "--last"])
+
 
 class RelayConfigTests(unittest.TestCase):
     ssh = str(Path(tempfile.gettempdir()) / "OpenSSH" / "ssh.exe")  # absolute on every OS
@@ -265,21 +292,24 @@ class WindowsLauncherTests(unittest.TestCase):
         mic = {"host": "mac", "label": "Mac", "tailscale_node_id": "n1", "platform": "darwin",
                "mac_audio": {"build_commit": COMMIT, "revision": "old"}}
         windows = Mock()
-        windows.stale.return_value = False
+        windows.audio.work_package.return_value = (self.root, COMMIT)
         windows.run_codex.return_value = 4
-        with patch.object(voice, "load_module", return_value=windows), \
+        with patch.object(voice.sys, "platform", "win32"), \
+                patch.object(voice, "load_module", return_value=windows), \
+                patch.object(voice.shutil, "which", return_value="/bin/ssh"), \
                 patch.object(voice, "probe", return_value={"host": "mac", "platform": "darwin"}) as probe, \
-                patch.object(voice, "prepare_mac_audio") as prepare, \
-                patch.object(voice, "config_dir", return_value=self.root):
+                patch.object(voice, "prepare_mac_audio") as prepare:
             with self.assertRaises(SystemExit) as raised:
-                voice.connect_windows(path, mic, "codex.cmd", ["resume"], str(ROOT))
+                voice.connect_mac_audio(path, mic, "codex.cmd", ["resume"], str(ROOT), self.root)
         self.assertEqual(raised.exception.code, 4)
         probe.assert_called_once()
         prepare.assert_called_once()
+        windows.audio.work_package.assert_called_once_with("codex.cmd")
+        self.assertEqual(windows.run_codex.call_args.kwargs["package"], (self.root, COMMIT))
         saved = json.loads(path.read_text())
         self.assertEqual((saved["label"], saved["tailscale_node_id"]), ("Mac", "n1"))
         with self.assertRaises(voice.VoiceError) as raised:
-            voice.connect_windows(path, {"host": "box", "platform": "linux"}, "codex.cmd", [], str(ROOT))
+            voice.connect_mac_audio(path, {"host": "box", "platform": "linux"}, "codex.cmd", [], str(ROOT), self.root)
         self.assertEqual(raised.exception.code, "unsupported_route")
 
     @unittest.skipUnless(shutil.which("pwsh"), "needs PowerShell")
