@@ -238,7 +238,12 @@ Give the person the `human` steps from `next_steps`, then these checks from
 
 1. Herdr panes opened before setup: quit Codex there and run `source ~/.bashrc`
    (or `source ~/.zshrc`; PowerShell: `. $PROFILE.CurrentUserCurrentHost`) once, or
-   open a new pane. New panes and later reboots need nothing.
+   open a new pane. This is once per existing shell, not once per computer.
+   New panes and later reboots need nothing. Test from the person's actual
+   pane: a passing check in your SSH session or a fresh test pane does not
+   update an older shell. Run `codex-voice doctor --json` there after Codex exits
+   and check `shell_reload_needed` before investigating a "Failed to connect
+   voice mode" error on a work computer without a microphone.
 2. In a new pane on the work computer, run `codex`, then `/voice`.
 3. On a Mac, click **Allow** when macOS asks about **Codex Voice** (or **Codex
    Voice Audio** for an audio-only pairing); first time only, and possibly
