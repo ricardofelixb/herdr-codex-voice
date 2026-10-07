@@ -117,6 +117,28 @@ class VoiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "permission denied"):
             voice.run(["sh", "-c", "echo 'permission denied' >&2; exit 255"])
 
+    def test_local_setup_does_not_require_ssh_to_itself(self):
+        with patch.object(voice, 'run', return_value='CODEX_VOICE={"codex":"/bin/codex"}\n') as run:
+            mic = voice.probe(None)
+            self.assertTrue(mic['local'])
+            self.assertEqual(run.call_args.args[0][0], sys.executable)
+        mic.update(platform='darwin')
+        with patch.object(voice.subprocess, 'run') as execute:
+            voice.prepare_desktop(mic)
+            execute.assert_not_called()
+
+    def test_local_pairing_survives_hostname_changes_without_connecting_elsewhere(self):
+        (self.root / 'config.json').write_text(json.dumps({'local': True, 'hostname': 'old-name'}))
+        with patch.object(voice, 'config_dir', return_value=self.root), \
+             patch.object(voice, 'run', return_value='{"result":{"plugins":[{"enabled":true}]}}'), \
+             patch.object(voice.shutil, 'which', return_value='/bin/codex'), \
+             patch.object(sys.stdin, 'isatty', return_value=True), \
+             patch.object(sys.stdout, 'isatty', return_value=True), \
+             patch.object(os, 'execv', side_effect=SystemExit) as execute:
+            with self.assertRaises(SystemExit):
+                voice.connect([])
+            execute.assert_called_once_with('/bin/codex', ['/bin/codex'])
+
     def test_reinstall_refreshes_standalone_launcher(self):
         source = self.root / "source.py"
         for version in ("old", "new"):
@@ -150,6 +172,7 @@ class VoiceTests(unittest.TestCase):
     def test_other_shells_can_pair_without_an_alias(self):
         mic = {"host": "mic"}
         with patch.object(voice, "probe", return_value=mic), \
+             patch.object(voice, "pair_identity", return_value=None), \
              patch.object(voice, "backend"), patch.object(voice, "shell_file", return_value=None), \
              patch.object(voice.shutil, "which", return_value="/bin/codex"), \
              patch.object(voice, "install", return_value=self.root / "codex-voice"), \
@@ -172,19 +195,31 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(path.read_text(), "export A=1\nexport B=2\n")
 
     def test_setup_popup_keeps_errors_visible_until_enter(self):
+        import pty
         env = {**os.environ, "HERDR_PLUGIN_ENTRYPOINT_ID": "setup"}
+        terminal, child_terminal = pty.openpty()
+        self.addCleanup(os.close, terminal)
         with subprocess.Popen([sys.executable, voice.__file__, "setup", "-bad"], env=env,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stdin=child_terminal, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True) as process:
+            os.close(child_terminal)
             line = process.stdout.readline()
             self.assertIn("Codex Voice:", line)
             self.assertIsNone(process.poll())
-            process.stdin.write("\n")
-            process.stdin.close()
+            os.write(terminal, b"\n")
             process.wait(timeout=5)
             output = process.stdout.read()
             self.assertEqual(process.returncode, 1)
             self.assertIn("Press Enter to close.", output)
+
+    def test_setup_popup_never_prompts_json_or_non_interactive_callers(self):
+        env = {**os.environ, "HERDR_PLUGIN_ENTRYPOINT_ID": "setup"}
+        for args in (["setup", "--json"], ["setup", "-bad"]):
+            result = subprocess.run([sys.executable, voice.__file__, *args], env=env, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertNotIn("Press Enter", result.stdout + result.stderr)
+            if "--json" in args:
+                self.assertEqual((result.returncode, json.loads(result.stdout)["error"]["code"]), (2, "usage"))
 
     def test_ctrl_c_before_frontend_start_removes_socket(self):
         fake = self.root / "codex"

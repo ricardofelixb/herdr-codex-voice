@@ -1,0 +1,167 @@
+name: Herdr canary Windows checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'canary/**'
+      - '.github/workflows/canary-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'canary/**'
+      - '.github/workflows/canary-check.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-windows-tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      HERDR_CANARY_PACKAGE: canary
+      RUSTUP_TOOLCHAIN: '1.96.1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      # Preserve the bytes covered by the source/patch manifests on Windows.
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - name: Initialize task paths
+        shell: pwsh
+        run: |
+          $taskPaths = @{
+            CARGO_HOME = 'hcv-toolchain/cargo'
+            RUSTUP_HOME = 'hcv-toolchain/rustup'
+            CARGO_TARGET_DIR = 'hcv-target'
+            ZIG_GLOBAL_CACHE_DIR = 'hcv-zig-global'
+            ZIG_LOCAL_CACHE_DIR = 'hcv-zig-local'
+          }
+          foreach ($entry in $taskPaths.GetEnumerator()) {
+            "$($entry.Key)=$(Join-Path $env:RUNNER_TEMP $entry.Value)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Check out the plugin and canary package
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify package and apply to the exact upstream commit
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, sys
+          package = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / os.environ['HERDR_CANARY_PACKAGE']
+          sys.path.insert(0, str(package))
+          import prepare
+          manifest = prepare.metadata()
+          if manifest['build']['rust'] != '1.96.1' or manifest['build']['zig'] != '0.16.0':
+              raise RuntimeError('Update the verified CI toolchain pins with the package manifest')
+          source = pathlib.Path(os.environ['RUNNER_TEMP']) / 'hcv-source'
+          source.mkdir()
+          def git(*args):
+              subprocess.run(['git', '-C', str(source), *args], check=True)
+          git('init')
+          git('remote', 'add', 'origin', 'https://github.com/herdrdev/herdr.git')
+          git('fetch', '--no-tags', '--depth=1', 'origin', manifest['upstream']['commit'])
+          git('checkout', '--detach', 'FETCH_HEAD')
+          subprocess.run([sys.executable, str(package / 'prepare.py'), '--source', str(source), '--apply'], check=True)
+          print('Verified source and patch:', manifest['source_manifest_sha256'], manifest['patch_sha256'])
+
+      - name: Restore dependency and compiler caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+            ${{ env.ZIG_GLOBAL_CACHE_DIR }}
+            ${{ env.ZIG_LOCAL_CACHE_DIR }}
+          key: canary-windows-${{ runner.arch }}-rust1.96.1-zig0.16.0-v1-${{ hashFiles('canary/manifest.json', 'canary/build.py') }}
+          restore-keys: |
+            canary-windows-${{ runner.arch }}-rust1.96.1-zig0.16.0-v1-
+
+      - name: Install checksum-verified official Rust and Zig
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'hcv-toolchain'
+          New-Item -ItemType Directory -Force $tools | Out-Null
+          function Get-VerifiedDownload([string]$Url, [string]$Path, [string]$Sha256) {
+            Invoke-WebRequest -Uri $Url -OutFile $Path
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+            if ($actual -ne $Sha256) { throw "Checksum mismatch for $Url" }
+            Write-Host "Verified $Url SHA256 $actual"
+          }
+          $rustup = Join-Path $tools 'rustup-init.exe'
+          # Official checksum: the same URL with .sha256 appended.
+          Get-VerifiedDownload `
+            'https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-pc-windows-msvc/rustup-init.exe' `
+            $rustup '6f4bef66261261fcb43131be8720bab817d403a09edec7455c371974b90bdb7e'
+          & $rustup -y --no-modify-path --profile minimal --default-host x86_64-pc-windows-msvc --default-toolchain 1.96.1
+          if ($LASTEXITCODE -ne 0) { throw "Rustup failed: $LASTEXITCODE" }
+          # Rustup verifies Rust components against the official pinned-version manifests.
+          $zigZip = Join-Path $tools 'zig-x86_64-windows-0.16.0.zip'
+          # Official checksum: https://ziglang.org/download/index.json, 0.16.0/x86_64-windows.
+          Get-VerifiedDownload `
+            'https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip' `
+            $zigZip '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e'
+          Expand-Archive -LiteralPath $zigZip -DestinationPath $tools
+          Join-Path $env:CARGO_HOME 'bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "ZIG=$(Join-Path $tools 'zig-x86_64-windows-0.16.0/zig.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run only the 24 pinned canary tests
+        shell: python
+        run: |
+          import os, pathlib, subprocess, sys
+          source = pathlib.Path(os.environ['RUNNER_TEMP']) / 'hcv-source'
+          reports = pathlib.Path(os.environ['RUNNER_TEMP']) / 'hcv-reports'
+          reports.mkdir()
+          package = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / os.environ['HERDR_CANARY_PACKAGE']
+          vswhere = pathlib.Path(os.environ['ProgramFiles(x86)']) / 'Microsoft Visual Studio/Installer/vswhere.exe'
+          vs = subprocess.check_output([str(vswhere), '-latest', '-products', '*', '-requires',
+                                       'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                                       '-property', 'installationPath'], text=True).strip()
+          if not vs:
+              raise RuntimeError('The Windows runner needs the x64 MSVC build tools')
+          vcvars = pathlib.Path(vs) / 'VC/Auxiliary/Build/vcvars64.bat'
+          script = reports / 'vc-environment.cmd'
+          script.write_text('@echo off\ncall "' + str(vcvars) + '" >nul\nif errorlevel 1 exit /b 1\nset\n')
+          result = subprocess.run(['cmd.exe', '/d', '/c', str(script)], check=True, capture_output=True, text=True)
+          env = {key.upper(): value for key, value in os.environ.items()}
+          for line in result.stdout.splitlines():
+              if '=' in line and not line.startswith('='):
+                  key, value = line.split('=', 1)
+                  env[key.upper()] = value
+          env['PATH'] = str(pathlib.Path(env['CARGO_HOME']) / 'bin') + os.pathsep + env['PATH']
+          env.pop('HERDR_UPDATE_API_SCHEMA', None)
+          command = [sys.executable, str(package / 'build.py'), '--source', str(source),
+                     '--output', str(reports), '--target-dir', env['CARGO_TARGET_DIR'],
+                     '--target', 'x86_64-pc-windows-msvc', '--jobs', '2', '--tests-only']
+          with (reports / 'focused-tests.log').open('w', encoding='utf-8') as log:
+              process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, text=True)
+              for line in process.stdout:
+                  print(line, end='', flush=True)
+                  log.write(line)
+              code = process.wait()
+          # Do not rename or otherwise work around a blocked test executable.
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('Herdr canary Windows focused checks exited ' + str(code) + '.\n')
+              summary.write('Required counts: input origin/status 12, frozen endpoint 10, handshake 1, schema 1.\n')
+          raise SystemExit(code)
+
+      - name: Keep focused-test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: herdr-canary-windows-focused-tests
+          path: |
+            ${{ runner.temp }}/hcv-reports/focused-tests.log
+            ${{ runner.temp }}/hcv-reports/focused-tests.json
+          if-no-files-found: warn
+          retention-days: 14

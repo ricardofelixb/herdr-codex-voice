@@ -1,148 +1,193 @@
 # Codex Voice for Herdr
 
-Open a remote machine's pane, type `codex`, and use native `/voice`.
-Codex's interface and audio run on your microphone computer. Its backend,
-project files, and commands stay on the work computer you selected in Herdr.
-No helper pane appears on the microphone computer. Normal launches print no
-plugin banner or setup messages.
+Open a Herdr pane on your work computer, type `codex`, and use native `/voice`
+with the microphone and speakers of the computer you are sitting at. Project
+files, commands and Codex's backend stay on the work computer. Normal launches
+print no plugin banner and open no helper pane.
 
-This is an early release. macOS and Linux are supported; use WSL for a Windows
-work computer. Native Windows and mobile microphone hosts are not supported.
-Tailscale provides reachability, not audio forwarding or SSH authorization.
+Version **0.5.0 is an experimental preview**. It works with released Herdr
+0.9.3: one paired microphone is used directly, and multiple pairings show a
+choice when Codex starts. Automatic selection requires the separate, optional
+[Herdr canary](canary/README.md); installing this plugin does not replace Herdr.
 
-The Linux-to-macOS canary has verified native Codex launch through a hidden
-desktop app, remote command execution, resume, resizing, and cleanup after a
-disconnect without a helper pane. The original direct SSH launch was rejected
-by macOS's microphone permission system. Version 0.2 uses the desktop app to give macOS a normal
-application permission context. A voice conversation still awaits a microphone
-on the Mac mini canary; do not treat audio as fully validated yet.
+**Agents:** follow [AGENT-INSTALL.md](AGENT-INSTALL.md). Setup, pairing,
+diagnostics and removal take `--json`, never prompt, and return stable error
+codes.
+
+## Supported directions
+
+| Microphone computer | Work computer: macOS or Linux (incl. WSL) | Native Windows work computer |
+|---|---|---|
+| macOS | Supported | Experimental preview (voice helper only) |
+| Linux desktop | Supported | Not supported |
+| Windows | Experimental (voice helper only) | Not supported |
+| Same computer (`--local`) | Supported | Experimental (plain Codex) |
+
+This is an early release. Phones and tablets are not supported. Tailscale
+provides reachability, not audio forwarding or SSH authorization.
 
 ## Install once per work computer
 
-Requirements:
-
-- Herdr 0.9.3+, Python 3.9+, OpenSSH, and Codex CLI with `--remote` and
-  `app-server daemon start` on the work computer. Tested with Codex 0.160.0.
-- Codex CLI, Python 3.9+, and an SSH server on the microphone computer.
-  Native voice must work there with a microphone and speakers or headset.
-- On a microphone Mac, log into its desktop as the SSH user. Apple's Command
-  Line Tools are required for the one-time app build. If missing, install them
-  with `xcode-select --install`. Allow **Codex Voice** microphone access when
-  macOS asks during the first voice session.
-- Working SSH from the work computer to the microphone computer, including
-  remote Unix socket forwarding. Use a Tailscale name or an existing SSH alias.
-
-On the work computer:
+Requirements: Herdr 0.9.3+, Python 3.9+, OpenSSH and Codex CLI on the work
+computer (tested with Codex 0.160). On the microphone computer: Codex CLI,
+Python 3, an SSH server, and native voice working there. SSH from the work
+computer must work without prompts (`ssh -o BatchMode=yes HOST true`); put
+users, ports and keys in `~/.ssh/config` and use the alias.
 
 ```sh
-herdr plugin install ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref v0.5.0 ricardofelixb/herdr-codex-voice
 $HOME/.local/bin/codex-voice setup you@your-microphone-computer
+$HOME/.local/bin/codex-voice doctor
 ```
 
-Setup discovers executable paths, checks the backend, saves the pairing, and
-adds a marked alias block to `.bashrc` or `.zshrc`. It preserves a backup of the
-original file. Open a new Herdr terminal, then:
+`--ref v0.5.0` pins this preview. Installing without `--ref` uses the default
+branch indexed by the Herdr Marketplace.
+
+Setup discovers paths, checks the backend, saves the pairing and adds a marked
+alias block to `.bashrc` or `.zshrc` (keeping a backup of the original). Open a
+new Herdr pane, type `codex`, then `/voice`. A pane that was already open still
+has its old shell: quit Codex there and run `source ~/.bashrc` (or
+`source ~/.zshrc`) once, or open a new pane. New panes and reboots need nothing.
+That reload is once per shell that was open before setup, not once per computer.
+Bash and Zsh get the alias; other shells can run `codex-voice run`. Herdr's
+plugin actions also offer **Set up Codex voice**.
+
+`doctor` checks the installation, SSH, socket forwarding and, where the OS
+exposes it, microphone permission. It cannot hear: test speech recognition and
+playback once on each newly paired computer.
+
+On a microphone Mac, log into its desktop as the SSH user. Apple's Command Line
+Tools are needed once to build a small background app (`xcode-select --install`).
+Allow **Codex Voice** microphone access when macOS asks during the first
+`/voice`. Use `codex-voice setup --local` when Herdr runs on the computer whose
+microphone you use.
+
+## Several microphone computers
 
 ```sh
-codex
+codex-voice pair Laptop you@your-laptop
+codex-voice pair PC you@your-windows-pc
+codex-voice unpair PC
 ```
 
-Use `/voice` in Codex. Setup persists across terminal sessions and reboots;
-nothing needs to be installed in the microphone computer's Herdr. Mac setup
-installs a small background app under `~/.local/share/herdr-codex-voice`.
-You can also choose **Set up Codex
-voice** from Herdr's plugin actions. To change the microphone computer, run setup
-again with its SSH alias. Bash and Zsh receive automatic integration; other
-shells can call `codex-voice run` directly.
+With released Herdr, `codex` asks which microphone to use when several are
+paired; one pairing never asks. A Herdr build reporting the `pane_last_input`
+capability instead selects the computer that last typed into that pane, using
+Tailscale node identities saved at pairing. Released Herdr 0.9.3 lacks it; this
+repository packages it as a separately licensed source canary in
+[canary/](canary/README.md), which the plugin does not install. Unknown, disconnected or ambiguous input never
+silently selects a microphone. The route stays with that Codex session; restart
+or resume Codex after switching computers.
 
-`codex resume --last`, prompts, model options, and `-C` are forwarded.
-`codex exec`, `codex login`, help, version queries, and other utility commands
-keep using the work computer's binary. Outside Herdr, `codex` is unchanged.
-`command codex` bypasses the alias. A local pane on the paired microphone
-computer uses Codex directly. Disabling or uninstalling the plugin restores
-ordinary Codex behavior, even before you remove the shell alias.
+## Windows microphone (experimental)
+
+Only Codex's voice helper runs on the PC; the Codex terminal and backend stay on
+the work computer. The PC needs an OpenSSH server whose sessions start in the
+user's home, Python 3 as `py -3` or `python`, and Codex with **exactly the same
+build** as the work computer. Setup selects a matching installed helper and
+otherwise stops; it never upgrades Codex or downloads executables.
+
+Each launch runs native `codex` from a private, content-addressed copy of the
+work computer's Codex package (standalone or official npm), whose
+`codex-voice-host` is replaced by a shim that runs one `ssh -T` to a small
+launcher on the PC. Installed Codex files are never modified. SSH carries the
+helper's binary stdin/stdout unchanged; audio goes directly between the PC and
+OpenAI. This depends on Codex's package layout and is unsupported by Codex.
+
+## Windows work computer with a Mac microphone (preview)
+
+The same idea in reverse: Codex's terminal and backend stay on Windows, and only
+the voice helper of the identical Codex build runs on the Mac, started by a
+separate background app, **Codex Voice Audio**, so it has its own microphone
+permission. In the private package copy, the helper is a small relay built once
+from this repository's Rust source (`windows/relay`, no dependencies, needs
+Rust's MSVC toolchain); it runs one fixed `ssh -T` and passes the helper's
+binary stream through. Setup adds a `codex` function, for Herdr panes only, at
+the end of each PowerShell edition's `$PROFILE.CurrentUserCurrentHost`. That
+needs an execution policy that already runs your profile (`doctor` checks);
+setup never changes execution policy or other security settings. This
+route was verified with speech recognition and playback from a MacBook to a
+native Windows work computer on 2026-10-06, using matching Codex 0.160 builds.
+It remains a preview because it depends on Codex's private helper protocol. See
+[AGENT-INSTALL.md](AGENT-INSTALL.md#native-windows-work-computer-experimental).
+
+## Using codex
+
+Prompts, `resume`, model options and `-C` are forwarded. Utility commands such
+as `codex exec`, `login`, help and version queries run on the work computer.
+Outside Herdr, `codex` is unchanged, and `command codex` bypasses the alias.
+Disabling or uninstalling the plugin restores plain Codex. If Herdr cannot say
+whether the plugin is enabled, `codex` stops with an error instead of silently
+using the work computer's microphone.
+
+Files read by the Codex terminal, such as image attachments and frontend
+profiles, must exist on the microphone computer (Mac/Linux routes).
 
 ## How it works
 
+For Mac or Linux microphones with a Unix work computer:
+
 ```text
 Work computer's Herdr pane
-  └─ one SSH connection to microphone computer
+  └─ one SSH connection to the microphone computer
        ├─ native Codex terminal + microphone + speakers
-       │    macOS: launched by a background desktop app on the same terminal
+       │    macOS: started by a background desktop app on the same terminal
        └─ private forwarded Unix socket → work computer's Codex backend
 ```
 
-The backend's normal managed daemon is started only if needed. The SSH process
-owns the terminal and forwarding. Each run has a unique socket, removed when
-Codex exits. The plugin creates no Herdr workspaces, private servers, or audio
-relay processes. On macOS a small app launches Codex with the existing SSH
-terminal as its input and output; it opens no window and exits with Codex.
-This gives microphone requests a desktop application identity instead of the
-SSH server's identity. The app has a microphone usage description and audio
-input entitlement and uses the normal macOS consent flow.
-
-The plugin adds no prompts, model overrides, or approval settings. Shell
-profiles are loaded only during setup or when refreshing an older helper.
-The app is compiled once per app revision. Helper updates keep the pairing,
-and existing sessions continue using their original app executable.
-An update that changes the app binary may require microphone approval again
-on the Mac. Python-only helper updates reuse the existing app binary.
-
-Install on any supported work device with the same two commands; usernames,
-hostnames, paths, and Python installations are discovered, not built into the
-plugin. No reverse SSH login or extra inbound TCP port is needed on the work
-computer. SSH keys and Codex credentials stay in their existing locations.
+Codex's managed daemon is started only if needed and keeps its default
+behavior. Each run uses a unique socket, removed when Codex exits. No reverse
+SSH login, extra inbound port or Herdr workspace is created. Windows routes
+use the helper relay described above. On
+macOS the app gives microphone requests a desktop application identity with a
+usage description and audio-input entitlement; it opens no window and exits with
+Codex. It is compiled once per app revision; an update that changes it may ask
+for microphone approval again. SSH keys and Codex credentials stay where they are.
 
 ## Troubleshooting
 
-- **SSH connection error:** first make `ssh -o BatchMode=yes YOUR-HOST true`
-  work from the work computer. Put a custom user, port, key, or proxy in
-  `~/.ssh/config`; setup accepts the alias. Trust its host key with a normal
-  `ssh YOUR-HOST` connection first.
-- **Forwarding denied:** the microphone computer's SSH server must permit
-  remote Unix socket forwarding. Managed Tailscale SSH servers may differ
-  from OpenSSH; use an OpenSSH server reached over the tailnet.
-- **Microphone unavailable:** connect an input device, allow microphone access
-  in the OS, and test native Codex there. Voice is provided by Codex itself.
-  On macOS, allow **Codex Voice** in Privacy & Security → Microphone and ensure
-  the SSH user is logged into the desktop. If permission is stuck after an app
-  update, run `tccutil reset Microphone dev.herdr.codex-voice` on that Mac, then
-  restart the voice session and approve its new request.
-- **Executable or helper moved after an update:** rerun setup to refresh the
-  discovered Python, Codex, and Node paths or reinstall a removed helper.
-  Stable Codex installer links are kept intact; changing Node installations
-  may still need setup again.
-- **Slow Codex startup:** plugin launch is quiet, but Codex's own updates, MCP
-  startup, and login prompts still appear. The plugin does not disable them.
-- **Different microphone computer:** rerun setup. Herdr's plugin context does
-  not identify the physical client reliably, so the pairing is explicit.
-- **Native remote limitations:** files read by the frontend, including image
-  attachments and frontend profiles, must exist on the microphone computer.
-  The project directory and agent tools run on the work computer.
+Run `codex-voice doctor` first; each failure names a code and a fix (see
+[AGENT-INSTALL.md](AGENT-INSTALL.md#codes)).
+
+- **An old pane says "Failed to connect voice mode":** after exiting Codex,
+  run `codex-voice doctor` in that pane. `shell_reload_needed` means it predates
+  setup and may still launch plain Codex using the work computer's audio.
+  Reload that shell once or open a new pane. A passing check in a separate SSH
+  session or fresh test pane does not update an existing shell.
+- **SSH errors:** make `ssh -o BatchMode=yes HOST true` work. Trust new host
+  keys with a normal `ssh HOST` first.
+- **Forwarding denied:** the microphone computer's OpenSSH server must allow
+  remote Unix socket forwarding. Managed Tailscale SSH servers may differ.
+- **Microphone unavailable:** connect a device and test native Codex there. On
+  macOS allow **Codex Voice** in Privacy & Security → Microphone; if permission
+  is stuck after an update, run `tccutil reset Microphone dev.herdr.codex-voice`
+  on that Mac and approve again. On Windows, turn on Microphone access and Let
+  desktop apps access your microphone.
+- **Codex moved or was updated:** pair again; setup is idempotent.
+- **Slow startup:** Codex's own updates, MCP startup and login prompts still
+  appear; the plugin does not disable them.
 
 ## Update or remove
 
 ```sh
-herdr plugin install ricardofelixb/herdr-codex-voice
-```
-
-Herdr 0.9.3 updates plugins by reinstalling them. Its build step refreshes the
-standalone launcher; pairing and shell setup survive updates. On the next
-launch, any changed Mac helper is updated automatically over SSH. To remove it:
-
-```sh
-$HOME/.local/bin/codex-voice unsetup
+herdr plugin install --yes --ref v0.5.0 ricardofelixb/herdr-codex-voice   # install/reinstall this release
+codex-voice unsetup --purge                         # remove alias, pairings, launcher
 herdr plugin uninstall herdr-codex-voice
 ```
 
-Open a new terminal afterward. Herdr retains plugin configuration; the small
-launcher at `~/.local/bin/codex-voice` can also be removed. Unsetup removes only
-the marked block, preserving later edits to your shell file.
-The Mac helper can be shared by several work computers. After closing their
-voice sessions, remove `~/.local/share/herdr-codex-voice` on the microphone Mac
-when no work computer needs it anymore. It installs no login item or daemon.
+Updates keep pairings and shell setup; a changed Mac helper is updated over SSH
+at the next launch. Plain `unsetup` removes only the marked shell block. Helper
+files on microphone computers may be shared by several work computers; remove
+`~/.local/share/herdr-codex-voice` (Mac) or `$env:USERPROFILE\.herdr-codex-voice`
+(Windows) when none uses them. Nothing installs login items or daemons.
 
-## Development and publishing
+For a later release, use its published tag in place of `v0.5.0` and run
+`codex-voice doctor` again. If you use automatic selection, check that the work
+server and SSH bridge still support the input-origin canary before updating
+Herdr itself. An official build without that capability uses the microphone
+choice instead when several are paired.
+
+## Development
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -150,10 +195,8 @@ herdr plugin link "$PWD"
 python3 voice.py install
 ```
 
-The root manifest is ready for direct GitHub installation. Adding the GitHub
-topic `herdr-plugin` opts the public repository into the Herdr Marketplace
-index. This is a separate publication step.
-
-See [Herdr plugins](https://herdr.dev/docs/plugins/),
-[marketplace publishing](https://herdr.dev/docs/marketplace/), and
+The root manifest supports direct GitHub installation. The GitHub topic
+`herdr-plugin` opts the repository into the Herdr Marketplace index. See
+[Herdr plugins](https://herdr.dev/docs/plugins/),
+[marketplace publishing](https://herdr.dev/docs/marketplace/) and
 [Codex app-server](https://learn.chatgpt.com/docs/app-server).
