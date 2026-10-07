@@ -2,7 +2,7 @@ id = "herdr-codex-voice"
 name = "Codex Voice"
 version = "0.5.0"
 min_herdr_version = "0.9.3"
-description = "Native Codex voice in remote panes using your microphone computer over SSH (Windows: experimental)."
+description = "Experimental Codex voice in remote panes over SSH. Automatic microphone selection needs the optional Herdr canary."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]

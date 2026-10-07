@@ -5,6 +5,11 @@ with the microphone and speakers of the computer you are sitting at. Project
 files, commands and Codex's backend stay on the work computer. Normal launches
 print no plugin banner and open no helper pane.
 
+Version **0.5.0 is an experimental preview**. It works with released Herdr
+0.9.3: one paired microphone is used directly, and multiple pairings show a
+choice when Codex starts. Automatic selection requires the separate, optional
+[Herdr canary](canary/README.md); installing this plugin does not replace Herdr.
+
 **Agents:** follow [AGENT-INSTALL.md](AGENT-INSTALL.md). Setup, pairing,
 diagnostics and removal take `--json`, never prompt, and return stable error
 codes.
@@ -30,13 +35,13 @@ computer must work without prompts (`ssh -o BatchMode=yes HOST true`); put
 users, ports and keys in `~/.ssh/config` and use the alias.
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref v0.5.0 ricardofelixb/herdr-codex-voice
 $HOME/.local/bin/codex-voice setup you@your-microphone-computer
 $HOME/.local/bin/codex-voice doctor
 ```
 
-Until this release is merged, keep `--ref windows-multihost`; the default branch
-holds an older version.
+`--ref v0.5.0` pins this preview. Installing without `--ref` uses the default
+branch indexed by the Herdr Marketplace.
 
 Setup discovers paths, checks the backend, saves the pairing and adds a marked
 alias block to `.bashrc` or `.zshrc` (keeping a backup of the original). Open a
@@ -165,7 +170,7 @@ Run `codex-voice doctor` first; each failure names a code and a fix (see
 ## Update or remove
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice   # update
+herdr plugin install --yes --ref v0.5.0 ricardofelixb/herdr-codex-voice   # install/reinstall this release
 codex-voice unsetup --purge                         # remove alias, pairings, launcher
 herdr plugin uninstall herdr-codex-voice
 ```
@@ -175,6 +180,12 @@ at the next launch. Plain `unsetup` removes only the marked shell block. Helper
 files on microphone computers may be shared by several work computers; remove
 `~/.local/share/herdr-codex-voice` (Mac) or `$env:USERPROFILE\.herdr-codex-voice`
 (Windows) when none uses them. Nothing installs login items or daemons.
+
+For a later release, use its published tag in place of `v0.5.0` and run
+`codex-voice doctor` again. If you use automatic selection, check that the work
+server and SSH bridge still support the input-origin canary before updating
+Herdr itself. An official build without that capability uses the microphone
+choice instead when several are paired.
 
 ## Development
 

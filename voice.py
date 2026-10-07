@@ -19,7 +19,7 @@ import uuid
 
 PLUGIN = "herdr-codex-voice"
 VERSION = "0.5.0"
-INSTALL_REF = "windows-multihost"  # Git ref agents install until this release is merged
+INSTALL_REF = "v0.5.0"  # Published release used by agent repair commands
 SCHEMA = "herdr-codex-voice/1"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",

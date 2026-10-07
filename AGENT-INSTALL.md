@@ -6,6 +6,11 @@ needed for things an agent cannot or must not do: approving the OS microphone
 prompt, trusting an unverified SSH host key, security-policy decisions, and
 confirming that speech and playback actually work.
 
+This guide installs the **0.5.0 experimental preview**. Start with released
+Herdr and its microphone choice when several computers are paired. Automatic
+selection is optional and requires a separately installed Herdr canary on the
+work server and SSH bridge. The plugin installer does not change Herdr itself.
+
 Commands below use `codex-voice`, installed at `$HOME/.local/bin/codex-voice`.
 Use that full path if `~/.local/bin` is not on `PATH`. On Windows it is a Python
 file: in PowerShell run `py -3 "$env:USERPROFILE\.local\bin\codex-voice" ...`.
@@ -119,7 +124,7 @@ fingerprint; never disable host key checking.
 ## 2. Install the plugin
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref v0.5.0 ricardofelixb/herdr-codex-voice
 "$HOME/.local/bin/codex-voice" doctor --json --offline
 ```
 
@@ -232,11 +237,13 @@ Tailscale on that computer and pairing it again.
 ## Update
 
 ```sh
-herdr plugin install --yes --ref windows-multihost ricardofelixb/herdr-codex-voice
+herdr plugin install --yes --ref v0.5.0 ricardofelixb/herdr-codex-voice
 codex-voice doctor --json
 ```
 
-Pairings and shell setup survive updates. A changed Mac helper is updated over
+The command above installs or reinstalls this preview; use the published tag
+of a later release when upgrading. Pairings and shell setup survive updates.
+A changed Mac helper is updated over
 SSH at the next launch (`desktop_helper_stale` until then; pairing again updates
 it now). For a Windows microphone, a changed work computer Codex build is
 re-paired at the next launch; if the PC has no matching build, `doctor` reports
